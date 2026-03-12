@@ -430,6 +430,14 @@ async function testOpenAiProvider(): Promise<string> {
   );
 
   const message = `测试成功：${decision.shouldTag ? `建议分类为 ${decision.category}` : '当前页面不建议打标'}。`;
+  await appendActivityLog('info', 'Provider 测试成功', {
+    providerType: 'openai-compatible',
+    url: pageSignals.url,
+    category: decision.category,
+    dominantSignal: decision.dominantSignal,
+    confidence: decision.confidence,
+    reason: decision.reason
+  });
   await saveProviderHealth({
     checkedAt: new Date().toISOString(),
     providerType: 'openai-compatible',
@@ -559,6 +567,10 @@ chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResp
       }
     } catch (error) {
       const messageText = serializeError(error);
+      await appendActivityLog('error', '运行时请求失败', {
+        requestType: message.type,
+        error: messageText
+      });
       await saveProviderHealth({
         checkedAt: new Date().toISOString(),
         providerType: (await loadSettings()).providerType as ProviderType,

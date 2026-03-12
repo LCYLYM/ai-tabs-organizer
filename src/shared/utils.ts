@@ -232,6 +232,10 @@ export function assertValidDecision(
     typeof decision.category === 'string' && categories.includes(decision.category)
       ? decision.category
       : null;
+  const dominantSignal =
+    typeof decision.dominantSignal === 'string' && allowedSignals.has(decision.dominantSignal)
+      ? decision.dominantSignal
+      : 'insufficient';
 
   return {
     shouldTag: shouldTag && Boolean(category),
@@ -241,9 +245,7 @@ export function assertValidDecision(
       typeof decision.reason === 'string' && decision.reason.trim()
         ? decision.reason.trim()
         : '模型未提供理由。',
-    dominantSignal: allowedSignals.has(decision.dominantSignal ?? 'insufficient')
-      ? (decision.dominantSignal as ClassificationDecision['dominantSignal'])
-      : 'insufficient',
+    dominantSignal,
     evidence: Array.isArray(decision.evidence)
       ? decision.evidence
           .filter((entry): entry is string => typeof entry === 'string')

@@ -37,7 +37,12 @@ function renderSummary(summary: PopupSummary): void {
     : '最近 Provider 状态：暂无';
 
   const latestLog = summary.latestLog
-    ? `最近日志：${summary.latestLog.timestamp} ${summary.latestLog.message}`
+    ? [
+        `最近日志：${summary.latestLog.timestamp} ${summary.latestLog.message}`,
+        summary.latestLog.detail ? `日志详情：${summary.latestLog.detail}` : null
+      ]
+        .filter(Boolean)
+        .join('\n')
     : '最近日志：暂无';
 
   ui.resultOutput.textContent = `${providerHealth}\n${latestLog}`;
