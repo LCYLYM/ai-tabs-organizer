@@ -32,6 +32,16 @@ import {
 const processingTabs = new Set<number>();
 const activeTabByWindow = new Map<number, number>();
 
+interface TabAccessProbeResult {
+  ok: boolean;
+  detail?: string;
+}
+
+interface ProcessTabResult {
+  status: 'tagged' | 'skipped';
+  detail?: string;
+}
+
 async function bootstrap(): Promise<void> {
   await ensureTrustedStorageAccess();
   await syncAlarmWithSettings();
@@ -154,6 +164,29 @@ async function classifyPage(
   return settings.providerType === 'chrome-built-in'
     ? classifyWithChromeBuiltInInOffscreen(payload, settings)
     : classifyWithOpenAiCompatible(payload, settings.openAiCompatible);
+}
+
+async function probeTabAccess(tab: chrome.tabs.Tab): Promise<TabAccessProbeResult> {
+  if (!tab.id || !tab.url) {
+    return { ok: false, detail: '标签页缺少 id 或 url。' };
+  }
+
+  if (!isClassifiableUrl(tab.url)) {
+    return { ok: false, detail: `不支持的页面协议：${tab.url}` };
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.location.href
+    });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: `不可读取页面内容：${serializeError(error)}`
+    };
+  }
 }
 
 async function getOrCreateCategoryGroup(
@@ -288,24 +321,35 @@ async function processTabForClassification(
   options?: {
     requireUnfocused?: boolean;
   }
-): Promise<'tagged' | 'skipped'> {
+): Promise<ProcessTabResult> {
   if (!tab.id || tab.windowId === undefined || !tab.url) {
-    return 'skipped';
+    return { status: 'skipped', detail: '标签页缺少必要字段。' };
   }
 
   if (processingTabs.has(tab.id)) {
-    return 'skipped';
+    return { status: 'skipped', detail: '该标签页正在处理中。' };
   }
 
   const requireUnfocused = options?.requireUnfocused ?? true;
   if (!(await isTabEligibleForReason(tab, settings, requireUnfocused))) {
-    return 'skipped';
+    return { status: 'skipped', detail: '不满足当前扫描条件。' };
   }
 
   const signature = buildPageSignature(tab.url);
   const existingCache = await loadClassificationCache();
   if (existingCache[signature]) {
-    return 'skipped';
+    return { status: 'skipped', detail: '该页面已经打过标，已跳过。' };
+  }
+
+  const accessProbe = await probeTabAccess(tab);
+  if (!accessProbe.ok) {
+    await appendActivityLog('info', '跳过不可注入页面', {
+      tabId: tab.id,
+      reason,
+      url: tab.url,
+      detail: accessProbe.detail
+    });
+    return { status: 'skipped', detail: accessProbe.detail };
   }
 
   processingTabs.add(tab.id);
@@ -322,7 +366,7 @@ async function processTabForClassification(
         url: tab.url,
         decision
       });
-      return 'skipped';
+      return { status: 'skipped', detail: `模型判定为不应打标：${decision.reason}` };
     }
 
     const groupId = await getOrCreateCategoryGroup(tab.windowId, tab.id, decision.category, settings);
@@ -346,7 +390,7 @@ async function processTabForClassification(
       url: tab.url
     });
 
-    return 'tagged';
+    return { status: 'tagged', detail: `已归类为 ${decision.category}` };
   } finally {
     processingTabs.delete(tab.id);
   }
@@ -376,13 +420,13 @@ async function scanTabs(
       summary.scanned += 1;
     try {
       const outcome = await processTabForClassification(tab, settings, reason, options);
-      if (outcome === 'tagged') {
+      if (outcome.status === 'tagged') {
         summary.tagged += 1;
-        summary.details.push(`tab ${tab.id}: 已分组`);
+        summary.details.push(`tab ${tab.id}: ${outcome.detail ?? '已分组'}`);
       } else {
         summary.skipped += 1;
-        if (!isClassifiableUrl(tab.url)) {
-          summary.details.push(`tab ${tab.id}: 已跳过不支持的页面 ${tab.url ?? '(无 URL)'}`);
+        if (outcome.detail) {
+          summary.details.push(`tab ${tab.id}: ${outcome.detail}`);
         }
       }
     } catch (error) {
@@ -413,13 +457,36 @@ async function testOpenAiProvider(): Promise<string> {
   }
 
   const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
-  const activeTab = tabs.find((tab) => tab.active && isClassifiableUrl(tab.url));
-  const fallbackTab = tabs.find((tab) => isClassifiableUrl(tab.url));
-  const targetTab = activeTab ?? fallbackTab;
+  const orderedTabs = [
+    ...tabs.filter((tab) => tab.active),
+    ...tabs.filter((tab) => !tab.active)
+  ].filter((tab, index, list) => list.findIndex((candidate) => candidate.id === tab.id) === index);
+  const skippedReasons: string[] = [];
+  let targetTab: chrome.tabs.Tab | undefined;
+
+  for (const tab of orderedTabs) {
+    if (!isClassifiableUrl(tab.url)) {
+      skippedReasons.push(`tab ${tab.id ?? 'unknown'}: 非 http/https 页面 ${tab.url ?? '(无 URL)'}`);
+      continue;
+    }
+
+    const probe = await probeTabAccess(tab);
+    if (probe.ok) {
+      targetTab = tab;
+      break;
+    }
+
+    skippedReasons.push(`tab ${tab.id ?? 'unknown'}: ${probe.detail ?? '不可注入页面'}`);
+  }
 
   if (!targetTab || !targetTab.id || !targetTab.url) {
     throw new Error(
-      '当前窗口没有可测试的网页标签页。请切到一个 http/https 页面后再测试，扩展页和 chrome:// 页面不会参与分类。'
+      [
+        '当前窗口没有可测试的网页标签页。请切到一个普通 http/https 页面后再测试。',
+        skippedReasons.length > 0 ? `候选页面跳过原因：${skippedReasons.join(' | ')}` : null
+      ]
+        .filter(Boolean)
+        .join('\n')
     );
   }
 
