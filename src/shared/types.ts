@@ -1,4 +1,5 @@
 export type ProviderType = 'openai-compatible' | 'chrome-built-in';
+export type TabGroupColor = chrome.tabGroups.TabGroup['color'];
 
 export interface OpenAiCompatibleConfig {
   baseUrl: string;
@@ -14,12 +15,18 @@ export interface ChromeBuiltInConfig {
 export interface AppSettings {
   enabled: boolean;
   categories: string[];
+  categoryRules: Record<string, CategoryRule>;
   promptSupplement: string;
   providerType: ProviderType;
   openAiCompatible: OpenAiCompatibleConfig;
   chromeBuiltIn: ChromeBuiltInConfig;
   contentCharacterLimit: number;
   alarmPeriodMinutes: number;
+}
+
+export interface CategoryRule {
+  color: TabGroupColor | 'auto';
+  collapsed: boolean;
 }
 
 export interface PageSignals {

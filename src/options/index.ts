@@ -1,6 +1,13 @@
+import { TAB_GROUP_COLOR_OPTIONS } from '../shared/constants.js';
 import { getChromeBuiltInAvailability, warmupChromeBuiltInModel } from '../shared/chrome-built-in-provider.js';
-import { loadSettings, saveProviderHealth, saveSettings } from '../shared/storage.js';
-import type { AppSettings, ScanSummary } from '../shared/types.js';
+import {
+  clearClassificationCache,
+  loadClassificationCache,
+  loadSettings,
+  saveProviderHealth,
+  saveSettings
+} from '../shared/storage.js';
+import type { AppSettings, CategoryRule, ClassificationCacheRecord, ScanSummary } from '../shared/types.js';
 import { prettyJson, sanitizeCategories, serializeError } from '../shared/utils.js';
 
 const categoriesInput = document.querySelector<HTMLTextAreaElement>('#categories-input');
@@ -20,6 +27,10 @@ const providerOpenAi = document.querySelector<HTMLElement>('#provider-openai');
 const providerChrome = document.querySelector<HTMLElement>('#provider-chrome');
 const testProviderButton = document.querySelector<HTMLButtonElement>('#test-provider-button');
 const runNowButton = document.querySelector<HTMLButtonElement>('#run-now-button');
+const categoryRulesContainer = document.querySelector<HTMLElement>('#category-rules');
+const historyPanel = document.querySelector<HTMLElement>('#history-panel');
+const refreshHistoryButton = document.querySelector<HTMLButtonElement>('#refresh-history-button');
+const clearHistoryButton = document.querySelector<HTMLButtonElement>('#clear-history-button');
 
 function assertElement<T>(element: T | null, name: string): T {
   if (!element) {
@@ -45,7 +56,11 @@ const ui = {
   providerOpenAi: assertElement(providerOpenAi, 'provider-openai'),
   providerChrome: assertElement(providerChrome, 'provider-chrome'),
   testProviderButton: assertElement(testProviderButton, 'test-provider-button'),
-  runNowButton: assertElement(runNowButton, 'run-now-button')
+  runNowButton: assertElement(runNowButton, 'run-now-button'),
+  categoryRulesContainer: assertElement(categoryRulesContainer, 'category-rules'),
+  historyPanel: assertElement(historyPanel, 'history-panel'),
+  refreshHistoryButton: assertElement(refreshHistoryButton, 'refresh-history-button'),
+  clearHistoryButton: assertElement(clearHistoryButton, 'clear-history-button')
 };
 
 function setStatus(message: string): void {
@@ -59,9 +74,11 @@ function toggleProviderPanels(providerType: AppSettings['providerType']): void {
 }
 
 function readSettingsFromForm(): AppSettings {
+  const categories = sanitizeCategories(ui.categoriesInput.value.split('\n'));
   return {
     enabled: ui.enabledInput.checked,
-    categories: sanitizeCategories(ui.categoriesInput.value.split('\n')),
+    categories,
+    categoryRules: readCategoryRulesFromForm(categories),
     promptSupplement: ui.promptInput.value.trim(),
     providerType:
       ui.providerSelect.value === 'chrome-built-in' ? 'chrome-built-in' : 'openai-compatible',
@@ -81,6 +98,7 @@ function readSettingsFromForm(): AppSettings {
 
 function writeSettingsToForm(settings: AppSettings): void {
   ui.categoriesInput.value = settings.categories.join('\n');
+  renderCategoryRules(settings.categories, settings.categoryRules);
   ui.promptInput.value = settings.promptSupplement;
   ui.providerSelect.value = settings.providerType;
   ui.baseUrlInput.value = settings.openAiCompatible.baseUrl;
@@ -92,6 +110,118 @@ function writeSettingsToForm(settings: AppSettings): void {
   ui.contentLimitInput.value = String(settings.contentCharacterLimit);
   ui.alarmMinutesInput.value = String(settings.alarmPeriodMinutes);
   toggleProviderPanels(settings.providerType);
+}
+
+function readCategoryRulesFromForm(categories: string[]): Record<string, CategoryRule> {
+  const rules: Record<string, CategoryRule> = {};
+  for (const category of categories) {
+    const safeKey = encodeURIComponent(category);
+    const colorSelect = ui.categoryRulesContainer.querySelector<HTMLSelectElement>(
+      `[data-rule-color="${safeKey}"]`
+    );
+    const collapsedInput = ui.categoryRulesContainer.querySelector<HTMLInputElement>(
+      `[data-rule-collapsed="${safeKey}"]`
+    );
+
+    rules[category] = {
+      color: (colorSelect?.value as CategoryRule['color'] | undefined) ?? 'auto',
+      collapsed: Boolean(collapsedInput?.checked)
+    };
+  }
+  return rules;
+}
+
+function renderCategoryRules(
+  categories: string[],
+  rules: Record<string, CategoryRule> | undefined
+): void {
+  if (categories.length === 0) {
+    ui.categoryRulesContainer.innerHTML = '<p class="hint">先输入分类名称，才能配置分组规则。</p>';
+    return;
+  }
+
+  ui.categoryRulesContainer.innerHTML = categories
+    .map((category) => {
+      const safeKey = encodeURIComponent(category);
+      const rule = rules?.[category];
+      const colorOptions = [
+        '<option value="auto">自动配色</option>',
+        ...TAB_GROUP_COLOR_OPTIONS.map(
+          (color) =>
+            `<option value="${color}"${rule?.color === color ? ' selected' : ''}>${color}</option>`
+        )
+      ].join('');
+
+      return `
+        <article class="rule-item">
+          <div class="rule-head">
+            <div class="rule-title">${escapeHtml(category)}</div>
+          </div>
+          <div class="rule-grid">
+            <label class="field">
+              <span>分组颜色</span>
+              <select data-rule-color="${safeKey}">
+                ${colorOptions}
+              </select>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" data-rule-collapsed="${safeKey}"${rule?.collapsed ? ' checked' : ''} />
+              <span>打标后默认折叠</span>
+            </label>
+          </div>
+        </article>
+      `;
+    })
+    .join('');
+}
+
+async function refreshHistory(): Promise<void> {
+  const cache = await loadClassificationCache();
+  const items = Object.values(cache)
+    .sort((left, right) => right.taggedAt.localeCompare(left.taggedAt))
+    .slice(0, 80);
+
+  renderHistory(items);
+}
+
+function renderHistory(items: ClassificationCacheRecord[]): void {
+  if (items.length === 0) {
+    ui.historyPanel.innerHTML = '<p class="hint">暂无历史记录。</p>';
+    return;
+  }
+
+  ui.historyPanel.innerHTML = items
+    .map(
+      (item) => `
+        <article class="history-item">
+          <div class="history-head">
+            <div class="history-title">${escapeHtml(item.category)}</div>
+            <div class="history-meta">${new Date(item.taggedAt).toLocaleString('zh-CN')}</div>
+          </div>
+          <div class="history-meta">
+            标题：${escapeHtml(item.title || '(无标题)')}<br />
+            Provider：${item.providerType === 'chrome-built-in' ? 'Chrome 内置 AI' : 'OpenAI 兼容接口'}<br />
+            置信度：${item.confidence.toFixed(2)}<br />
+            分组 ID：${item.groupId ?? '无'}
+          </div>
+          <div class="history-url"><a href="${escapeAttribute(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></div>
+        </article>
+      `
+    )
+    .join('');
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function escapeAttribute(value: string): string {
+  return escapeHtml(value);
 }
 
 async function handleSave(): Promise<void> {
@@ -156,15 +286,28 @@ async function handleRunNow(): Promise<void> {
         ...summary.details
       ].join('\n')
     );
+    await refreshHistory();
   } catch (error) {
     setStatus(`扫描失败：${serializeError(error)}`);
   }
+}
+
+async function handleClearHistory(): Promise<void> {
+  await clearClassificationCache();
+  await refreshHistory();
+  setStatus('分类历史已清空。');
 }
 
 ui.providerSelect.addEventListener('change', () => {
   toggleProviderPanels(
     ui.providerSelect.value === 'chrome-built-in' ? 'chrome-built-in' : 'openai-compatible'
   );
+});
+
+ui.categoriesInput.addEventListener('input', () => {
+  const categories = sanitizeCategories(ui.categoriesInput.value.split('\n'));
+  const currentRules = readCategoryRulesFromForm(categories);
+  renderCategoryRules(categories, currentRules);
 });
 
 ui.saveButton.addEventListener('click', () => {
@@ -179,8 +322,17 @@ ui.runNowButton.addEventListener('click', () => {
   void handleRunNow();
 });
 
+ui.refreshHistoryButton.addEventListener('click', () => {
+  void refreshHistory();
+});
+
+ui.clearHistoryButton.addEventListener('click', () => {
+  void handleClearHistory();
+});
+
 void (async () => {
   const settings = await loadSettings();
   writeSettingsToForm(settings);
+  await refreshHistory();
   setStatus('设置已加载。');
 })();

@@ -4,39 +4,34 @@ import type {
   ClassificationRequestPayload,
   OpenAiCompatibleConfig
 } from '../shared/types.js';
-import { assertValidDecision, buildResponsesEndpoint, serializeError } from '../shared/utils.js';
+import { assertValidDecision, buildChatCompletionsEndpoint, serializeError } from '../shared/utils.js';
 
 function extractResponseText(data: Record<string, unknown>): string {
-  if (typeof data.output_text === 'string' && data.output_text.trim()) {
-    return data.output_text;
+  const choices = Array.isArray(data.choices) ? data.choices : [];
+  const firstChoice = choices[0] as { message?: Record<string, unknown>; finish_reason?: string } | undefined;
+  if (!firstChoice?.message || typeof firstChoice.message !== 'object') {
+    throw new Error('OpenAI chat completions 响应中缺少 choices[0].message。');
   }
 
-  const output = Array.isArray(data.output) ? data.output : [];
-  const collected = output
-    .flatMap((item) => {
-      if (!item || typeof item !== 'object' || !Array.isArray((item as { content?: unknown[] }).content)) {
-        return [];
-      }
-      return (item as { content: Array<Record<string, unknown>> }).content;
-    })
-    .map((content) => {
-      if (typeof content.text === 'string') {
-        return content.text;
-      }
-
-      if (typeof content.output_text === 'string') {
-        return content.output_text;
-      }
-
-      return null;
-    })
-    .filter((value): value is string => Boolean(value && value.trim()));
-
-  if (collected.length === 0) {
-    throw new Error('OpenAI 响应中未找到可解析的文本输出。');
+  const refusal = firstChoice.message.refusal;
+  if (typeof refusal === 'string' && refusal.trim()) {
+    throw new Error(`模型拒绝返回结果：${refusal}`);
   }
 
-  return collected.join('\n');
+  const finishReason = firstChoice.finish_reason;
+  if (finishReason === 'length') {
+    throw new Error('模型输出因长度限制被截断，无法安全解析。');
+  }
+  if (finishReason === 'content_filter') {
+    throw new Error('模型输出被内容过滤中断。');
+  }
+
+  const content = firstChoice.message.content;
+  if (typeof content === 'string' && content.trim()) {
+    return content;
+  }
+
+  throw new Error('OpenAI chat completions 响应中未找到可解析的 message.content。');
 }
 
 export async function classifyWithOpenAiCompatible(
@@ -57,7 +52,7 @@ export async function classifyWithOpenAiCompatible(
   const timeout = globalThis.setTimeout(() => controller.abort(), 45_000);
 
   try {
-    const response = await fetch(buildResponsesEndpoint(config.baseUrl), {
+    const response = await fetch(buildChatCompletionsEndpoint(config.baseUrl), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
@@ -66,9 +61,9 @@ export async function classifyWithOpenAiCompatible(
       },
       body: JSON.stringify({
         model: config.model,
-        input: [
+        messages: [
           {
-            role: 'developer',
+            role: 'system',
             content: buildSystemInstruction(payload.categories, payload.promptSupplement)
           },
           {
@@ -76,9 +71,9 @@ export async function classifyWithOpenAiCompatible(
             content: buildUserPrompt(payload)
           }
         ],
-        text: {
-          format: {
-            type: 'json_schema',
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
             name: 'tab_classification',
             strict: true,
             schema: buildDecisionSchema(payload.categories)

@@ -1,6 +1,10 @@
-import type { ActivityLogEntry, AppSettings, ClassificationDecision } from './types.js';
-
-type TabGroupColor = chrome.tabGroups.TabGroup['color'];
+import type {
+  ActivityLogEntry,
+  AppSettings,
+  CategoryRule,
+  ClassificationDecision,
+  TabGroupColor
+} from './types.js';
 
 const GROUP_COLORS: TabGroupColor[] = [
   'blue',
@@ -26,9 +30,11 @@ export function sanitizeCategories(categories: string[]): string[] {
 }
 
 export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
+  const categories = sanitizeCategories(raw.categories ?? []);
   return {
     enabled: raw.enabled ?? true,
-    categories: sanitizeCategories(raw.categories ?? []),
+    categories,
+    categoryRules: sanitizeCategoryRules(raw.categoryRules ?? {}, categories),
     promptSupplement: (raw.promptSupplement ?? '').trim(),
     providerType: raw.providerType === 'chrome-built-in' ? 'chrome-built-in' : 'openai-compatible',
     openAiCompatible: {
@@ -45,6 +51,21 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     ),
     alarmPeriodMinutes: Math.round(clampNumber(raw.alarmPeriodMinutes ?? 5, 1, 60, 5))
   };
+}
+
+export function sanitizeCategoryRules(
+  rawRules: Record<string, Partial<CategoryRule>>,
+  categories: string[]
+): Record<string, CategoryRule> {
+  const sanitized: Record<string, CategoryRule> = {};
+  for (const category of categories) {
+    const rawRule = rawRules[category] ?? {};
+    sanitized[category] = {
+      color: isTabGroupColor(rawRule.color) ? rawRule.color : 'auto',
+      collapsed: Boolean(rawRule.collapsed)
+    };
+  }
+  return sanitized;
 }
 
 export function normalizeBaseUrl(baseUrl: string): string {
@@ -65,13 +86,15 @@ export function normalizeBaseUrl(baseUrl: string): string {
   }
 }
 
-export function buildResponsesEndpoint(baseUrl: string): string {
+export function buildChatCompletionsEndpoint(baseUrl: string): string {
   const normalized = normalizeBaseUrl(baseUrl);
-  if (normalized.endsWith('/responses')) {
+  if (normalized.endsWith('/chat/completions')) {
     return normalized;
   }
 
-  return normalized.endsWith('/v1') ? `${normalized}/responses` : `${normalized}/v1/responses`;
+  return normalized.endsWith('/v1')
+    ? `${normalized}/chat/completions`
+    : `${normalized}/v1/chat/completions`;
 }
 
 export function extractDomain(url: string): string {
@@ -87,6 +110,14 @@ export function isHttpUrl(url: string | undefined): boolean {
   return Boolean(url && /^https?:\/\//i.test(url));
 }
 
+export function isClassifiableUrl(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+
+  return /^https?:\/\//i.test(url);
+}
+
 export function computeStableHash(value: string): string {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index += 1) {
@@ -96,8 +127,8 @@ export function computeStableHash(value: string): string {
   return (hash >>> 0).toString(16);
 }
 
-export function buildPageSignature(url: string, title: string): string {
-  return computeStableHash(`${url.trim()}::${title.trim()}`);
+export function buildPageSignature(url: string): string {
+  return computeStableHash(url.trim());
 }
 
 export function limitText(value: string, limit: number): string {
@@ -111,6 +142,13 @@ export function limitText(value: string, limit: number): string {
 export function pickGroupColor(category: string): TabGroupColor {
   const hash = Number.parseInt(computeStableHash(category), 16);
   return GROUP_COLORS[hash % GROUP_COLORS.length] ?? 'grey';
+}
+
+export function resolveCategoryColor(category: string, rule: CategoryRule | undefined): TabGroupColor {
+  if (rule?.color && rule.color !== 'auto') {
+    return rule.color;
+  }
+  return pickGroupColor(category);
 }
 
 export function serializeError(error: unknown): string {
@@ -161,6 +199,20 @@ export function buildLogEntry(
     message,
     detail: trimLogDetail(detail)
   };
+}
+
+function isTabGroupColor(value: unknown): value is TabGroupColor {
+  return (
+    value === 'grey' ||
+    value === 'blue' ||
+    value === 'cyan' ||
+    value === 'green' ||
+    value === 'orange' ||
+    value === 'pink' ||
+    value === 'purple' ||
+    value === 'red' ||
+    value === 'yellow'
+  );
 }
 
 export function assertValidDecision(

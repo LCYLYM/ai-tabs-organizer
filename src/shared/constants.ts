@@ -10,6 +10,7 @@ export const STORAGE_KEYS = {
 export const DEFAULT_SETTINGS: AppSettings = {
   enabled: true,
   categories: [],
+  categoryRules: {},
   promptSupplement: '',
   providerType: 'openai-compatible',
   openAiCompatible: {
@@ -28,3 +29,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export const MAX_ACTIVITY_LOGS = 60;
 export const MAX_CACHE_RECORDS = 500;
 export const AUTOMATION_ALARM_NAME = 'auto-classify-tabs';
+export const TAB_GROUP_COLOR_OPTIONS = [
+  'grey',
+  'blue',
+  'cyan',
+  'green',
+  'orange',
+  'pink',
+  'purple',
+  'red',
+  'yellow'
+] as const;

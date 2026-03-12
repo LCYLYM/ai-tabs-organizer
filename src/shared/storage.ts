@@ -55,6 +55,10 @@ export async function upsertClassificationRecord(record: ClassificationCacheReco
   await saveClassificationCache(cache);
 }
 
+export async function clearClassificationCache(): Promise<void> {
+  await chrome.storage.local.remove(STORAGE_KEYS.cache);
+}
+
 export async function loadActivityLogs(): Promise<ActivityLogEntry[]> {
   return (await getLocalValue<ActivityLogEntry[]>(STORAGE_KEYS.activityLogs)) ?? [];
 }

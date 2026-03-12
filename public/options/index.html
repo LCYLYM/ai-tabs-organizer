@@ -105,6 +105,25 @@
           <pre id="status-output" class="status-box">尚未执行。</pre>
         </div>
       </section>
+
+      <section class="card split">
+        <div>
+          <h2>分类分组规则</h2>
+          <p class="hint">为每个分类指定分组颜色，并设置打标后是否默认折叠。</p>
+          <div id="category-rules" class="rules-list"></div>
+        </div>
+
+        <div>
+          <h2>分类结果历史</h2>
+          <div class="button-row">
+            <button id="refresh-history-button" class="secondary-button">刷新历史</button>
+            <button id="clear-history-button" class="secondary-button">清空历史</button>
+          </div>
+          <div id="history-panel" class="history-panel">
+            <p class="hint">暂无历史记录。</p>
+          </div>
+        </div>
+      </section>
     </main>
 
     <script type="module" src="index.js"></script>

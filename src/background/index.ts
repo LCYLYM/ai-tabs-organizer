@@ -24,8 +24,8 @@ import type {
 import {
   buildPageSignature,
   extractDomain,
-  isHttpUrl,
-  pickGroupColor,
+  isClassifiableUrl,
+  resolveCategoryColor,
   serializeError
 } from '../shared/utils.js';
 
@@ -67,14 +67,26 @@ async function getFocusedWindowId(): Promise<number | null> {
 }
 
 async function isTabEligible(tab: chrome.tabs.Tab, settings: AppSettings): Promise<boolean> {
+  return isTabEligibleForReason(tab, settings, true);
+}
+
+async function isTabEligibleForReason(
+  tab: chrome.tabs.Tab,
+  settings: AppSettings,
+  requireUnfocused: boolean
+): Promise<boolean> {
   if (!settings.enabled || settings.categories.length === 0) {
     return false;
   }
-  if (!tab.id || tab.windowId === undefined || !isHttpUrl(tab.url)) {
+  if (!tab.id || tab.windowId === undefined || !isClassifiableUrl(tab.url)) {
     return false;
   }
   if (tab.status !== 'complete') {
     return false;
+  }
+
+  if (!requireUnfocused) {
+    return true;
   }
 
   const focusedWindowId = await getFocusedWindowId();
@@ -147,8 +159,10 @@ async function classifyPage(
 async function getOrCreateCategoryGroup(
   windowId: number,
   tabId: number,
-  category: string
+  category: string,
+  settings: AppSettings
 ): Promise<number> {
+  const categoryRule = settings.categoryRules[category];
   const existingGroups = await chrome.tabGroups.query({ windowId });
   const matchingGroup = existingGroups.find((group) => group.title === category);
 
@@ -156,8 +170,8 @@ async function getOrCreateCategoryGroup(
     const groupId = await chrome.tabs.group({ groupId: matchingGroup.id, tabIds: [tabId] });
     await chrome.tabGroups.update(groupId, {
       title: category,
-      color: pickGroupColor(category),
-      collapsed: false
+      color: resolveCategoryColor(category, categoryRule),
+      collapsed: categoryRule?.collapsed ?? false
     });
     return groupId;
   }
@@ -169,8 +183,8 @@ async function getOrCreateCategoryGroup(
 
   await chrome.tabGroups.update(groupId, {
     title: category,
-    color: pickGroupColor(category),
-    collapsed: false
+    color: resolveCategoryColor(category, categoryRule),
+    collapsed: categoryRule?.collapsed ?? false
   });
 
   return groupId;
@@ -270,7 +284,10 @@ async function collectPageSignals(tab: chrome.tabs.Tab, settings: AppSettings): 
 async function processTabForClassification(
   tab: chrome.tabs.Tab,
   settings: AppSettings,
-  reason: string
+  reason: string,
+  options?: {
+    requireUnfocused?: boolean;
+  }
 ): Promise<'tagged' | 'skipped'> {
   if (!tab.id || tab.windowId === undefined || !tab.url) {
     return 'skipped';
@@ -280,11 +297,12 @@ async function processTabForClassification(
     return 'skipped';
   }
 
-  if (!(await isTabEligible(tab, settings))) {
+  const requireUnfocused = options?.requireUnfocused ?? true;
+  if (!(await isTabEligibleForReason(tab, settings, requireUnfocused))) {
     return 'skipped';
   }
 
-  const signature = buildPageSignature(tab.url, tab.title ?? '');
+  const signature = buildPageSignature(tab.url);
   const existingCache = await loadClassificationCache();
   if (existingCache[signature]) {
     return 'skipped';
@@ -307,7 +325,7 @@ async function processTabForClassification(
       return 'skipped';
     }
 
-    const groupId = await getOrCreateCategoryGroup(tab.windowId, tab.id, decision.category);
+    const groupId = await getOrCreateCategoryGroup(tab.windowId, tab.id, decision.category, settings);
     await upsertClassificationRecord({
       signature,
       category: decision.category,
@@ -336,7 +354,10 @@ async function processTabForClassification(
 
 async function scanTabs(
   tabs: chrome.tabs.Tab[],
-  reason: string
+  reason: string,
+  options?: {
+    requireUnfocused?: boolean;
+  }
 ): Promise<ScanSummary> {
   const settings = await loadSettings();
   const summary: ScanSummary = {
@@ -352,14 +373,17 @@ async function scanTabs(
       continue;
     }
 
-    summary.scanned += 1;
+      summary.scanned += 1;
     try {
-      const outcome = await processTabForClassification(tab, settings, reason);
+      const outcome = await processTabForClassification(tab, settings, reason, options);
       if (outcome === 'tagged') {
         summary.tagged += 1;
         summary.details.push(`tab ${tab.id}: 已分组`);
       } else {
         summary.skipped += 1;
+        if (!isClassifiableUrl(tab.url)) {
+          summary.details.push(`tab ${tab.id}: 已跳过不支持的页面 ${tab.url ?? '(无 URL)'}`);
+        }
       }
     } catch (error) {
       summary.errors += 1;
@@ -379,7 +403,7 @@ async function scanTabs(
 
 async function scanCurrentWindow(reason: string): Promise<ScanSummary> {
   const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
-  return scanTabs(tabs, reason);
+  return scanTabs(tabs, reason, { requireUnfocused: false });
 }
 
 async function testOpenAiProvider(): Promise<string> {
@@ -388,12 +412,18 @@ async function testOpenAiProvider(): Promise<string> {
     throw new Error('当前 Provider 不是 OpenAI 兼容接口。');
   }
 
-  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!activeTab || !activeTab.id || !activeTab.url) {
-    throw new Error('未找到当前激活标签页，无法执行真实测试。');
+  const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
+  const activeTab = tabs.find((tab) => tab.active && isClassifiableUrl(tab.url));
+  const fallbackTab = tabs.find((tab) => isClassifiableUrl(tab.url));
+  const targetTab = activeTab ?? fallbackTab;
+
+  if (!targetTab || !targetTab.id || !targetTab.url) {
+    throw new Error(
+      '当前窗口没有可测试的网页标签页。请切到一个 http/https 页面后再测试，扩展页和 chrome:// 页面不会参与分类。'
+    );
   }
 
-  const pageSignals = await collectPageSignals(activeTab, settings);
+  const pageSignals = await collectPageSignals(targetTab, settings);
   const decision = await classifyWithOpenAiCompatible(
     buildClassificationPayload(settings, pageSignals),
     settings.openAiCompatible
@@ -486,7 +516,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 
   void (async () => {
-    if (!tab.url || !isHttpUrl(tab.url)) {
+    if (!tab.url || !isClassifiableUrl(tab.url)) {
       return;
     }
 

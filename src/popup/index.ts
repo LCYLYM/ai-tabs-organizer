@@ -1,3 +1,4 @@
+import { loadSettings, saveSettings } from '../shared/storage.js';
 import type { PopupSummary, ScanSummary } from '../shared/types.js';
 import { serializeError } from '../shared/utils.js';
 
@@ -5,6 +6,7 @@ const summaryElement = document.querySelector<HTMLElement>('#summary');
 const resultOutput = document.querySelector<HTMLElement>('#result-output');
 const scanButton = document.querySelector<HTMLButtonElement>('#scan-button');
 const settingsButton = document.querySelector<HTMLButtonElement>('#settings-button');
+const autoToggle = document.querySelector<HTMLInputElement>('#auto-toggle');
 
 function assertElement<T>(element: T | null, name: string): T {
   if (!element) {
@@ -17,7 +19,8 @@ const ui = {
   summaryElement: assertElement(summaryElement, 'summary'),
   resultOutput: assertElement(resultOutput, 'result-output'),
   scanButton: assertElement(scanButton, 'scan-button'),
-  settingsButton: assertElement(settingsButton, 'settings-button')
+  settingsButton: assertElement(settingsButton, 'settings-button'),
+  autoToggle: assertElement(autoToggle, 'auto-toggle')
 };
 
 function renderSummary(summary: PopupSummary): void {
@@ -44,6 +47,7 @@ async function refreshSummary(): Promise<void> {
   const summary = (await chrome.runtime.sendMessage({
     type: 'get-popup-summary'
   })) as PopupSummary;
+  ui.autoToggle.checked = summary.enabled;
   renderSummary(summary);
 }
 
@@ -75,6 +79,21 @@ ui.scanButton.addEventListener('click', () => {
 
 ui.settingsButton.addEventListener('click', () => {
   void chrome.runtime.openOptionsPage();
+});
+
+ui.autoToggle.addEventListener('change', () => {
+  void (async () => {
+    try {
+      const settings = await loadSettings();
+      settings.enabled = ui.autoToggle.checked;
+      await saveSettings(settings);
+      ui.resultOutput.textContent = `自动打标已${settings.enabled ? '开启' : '关闭'}。`;
+      await refreshSummary();
+    } catch (error) {
+      ui.autoToggle.checked = !ui.autoToggle.checked;
+      ui.resultOutput.textContent = `切换自动打标失败：${serializeError(error)}`;
+    }
+  })();
 });
 
 void refreshSummary();
