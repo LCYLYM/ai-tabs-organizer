@@ -75,6 +75,8 @@ type TranslationKey =
   | 'options.language.zh-CN'
   | 'options.language.en'
   | 'options.diagnostics'
+  | 'options.languageSection'
+  | 'options.languageHint'
   | 'options.testProvider'
   | 'options.testingProvider'
   | 'options.modelReady'
@@ -194,6 +196,8 @@ const zhCN: TranslationMap = {
   'options.language.zh-CN': '简体中文',
   'options.language.en': 'English',
   'options.diagnostics': '连接与诊断',
+  'options.languageSection': '界面语言',
+  'options.languageHint': '可在这里切换完整中文界面、完整英文界面，或跟随浏览器语言。',
   'options.testProvider': '测试 Provider',
   'options.testingProvider': '正在执行 Provider 测试...',
   'options.modelReady': '模型已就绪。',
@@ -312,6 +316,8 @@ const en: TranslationMap = {
   'options.language.zh-CN': '简体中文',
   'options.language.en': 'English',
   'options.diagnostics': 'Connection & diagnostics',
+  'options.languageSection': 'Interface language',
+  'options.languageHint': 'Switch between full Chinese UI, full English UI, or follow the browser language.',
   'options.testProvider': 'Test provider',
   'options.testingProvider': 'Running provider test...',
   'options.modelReady': 'Model ready.',
