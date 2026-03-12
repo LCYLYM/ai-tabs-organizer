@@ -9,19 +9,20 @@
   <body>
     <main class="popup">
       <p class="eyebrow">AI Tabs</p>
-      <h1>当前窗口状态</h1>
+      <h1 data-i18n="popup.title">当前窗口状态</h1>
       <label class="toggle-row">
         <input id="auto-toggle" type="checkbox" />
-        <span>自动打标</span>
+        <span data-i18n="popup.autoTagging">自动打标</span>
       </label>
-      <div id="summary" class="summary">正在加载...</div>
+      <div id="summary" class="summary" data-i18n="popup.loading">正在加载...</div>
       <div class="button-column">
-        <button id="scan-button" class="primary-button">一键打标当前窗口</button>
-        <button id="rebuild-button" class="secondary-button">重建当前窗口分组</button>
-        <button id="clear-button" class="secondary-button">清除所有分组/记录</button>
-        <button id="settings-button" class="secondary-button">打开设置</button>
+        <button id="scan-button" class="primary-button" data-i18n="popup.scanCurrentWindow">一键打标当前窗口</button>
+        <button id="rebuild-button" class="secondary-button" data-i18n="popup.rebuildCurrentWindow">重建当前窗口分组</button>
+        <button id="clear-current-button" class="secondary-button" data-i18n="popup.clearCurrentWindow">清除当前窗口分组/记录</button>
+        <button id="clear-button" class="secondary-button" data-i18n="popup.clearAll">清除所有分组/记录</button>
+        <button id="settings-button" class="secondary-button" data-i18n="popup.openSettings">打开设置</button>
       </div>
-      <pre id="result-output" class="result-box">等待操作。</pre>
+      <pre id="result-output" class="result-box" data-i18n="popup.waiting">等待操作。</pre>
     </main>
     <script type="module" src="index.js"></script>
   </body>

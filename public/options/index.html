@@ -10,70 +10,83 @@
     <main class="page">
       <header class="hero">
         <div>
-          <p class="eyebrow">AI Tabs Organizer</p>
-          <h1>中文标签页自动分类设置</h1>
-          <p class="intro">
+          <p class="eyebrow" data-i18n="options.eyebrow">AI Tabs Organizer</p>
+          <h1 data-i18n="options.title">中文标签页自动分类设置</h1>
+          <p class="intro" data-i18n="options.intro">
             配置分类目标、AI Provider 和自动打标策略。扩展只会在标签页未获得焦点且当前页面尚未被打标时触发分类。
           </p>
         </div>
-        <button id="save-button" class="primary-button">保存设置</button>
+        <button id="save-button" class="primary-button" data-i18n="options.save">保存设置</button>
       </header>
 
       <section class="card">
-        <h2>分类目标</h2>
+        <h2 data-i18n="options.categories">分类目标</h2>
         <label class="field">
-          <span>分类名称</span>
+          <span data-i18n="options.categoryNames">分类名称</span>
           <textarea
             id="categories-input"
             rows="6"
+            data-i18n-placeholder="options.categoryPlaceholder"
             placeholder="每行一个分类，例如：工作项目&#10;学习资料&#10;待办处理"
           ></textarea>
         </label>
         <label class="field">
-          <span>补充提示词</span>
+          <span data-i18n="options.promptSupplement">补充提示词</span>
           <textarea
             id="prompt-input"
             rows="5"
+            data-i18n-placeholder="options.promptPlaceholder"
             placeholder="可选。补充你的分类原则、业务语境、禁忌或优先规则。"
           ></textarea>
         </label>
       </section>
 
       <section class="card">
-        <h2>Provider</h2>
+        <h2 data-i18n="options.provider">Provider</h2>
         <label class="field">
-          <span>AI Provider</span>
+          <span data-i18n="options.providerLabel">AI Provider</span>
           <select id="provider-select">
-            <option value="openai-compatible">OpenAI 兼容接口</option>
-            <option value="chrome-built-in">AI 语义解析（Chrome 内置 Prompt API）</option>
+            <option value="openai-compatible" data-i18n="options.provider.openai">OpenAI 兼容接口</option>
+            <option value="chrome-built-in" data-i18n="options.provider.chrome">AI 语义解析（Chrome 内置 Prompt API）</option>
           </select>
         </label>
 
         <div id="provider-openai" class="provider-panel">
           <label class="field">
-            <span>Base URL</span>
+            <span data-i18n="options.baseUrl">Base URL</span>
             <input id="base-url-input" type="url" placeholder="https://api.openai.com/v1" />
           </label>
           <label class="field">
-            <span>API Key</span>
-            <input id="api-key-input" type="password" placeholder="sk-..." autocomplete="off" />
+            <span data-i18n="options.apiKey">API Key</span>
+            <input
+              id="api-key-input"
+              type="password"
+              data-i18n-placeholder="options.apiKeyPlaceholder"
+              placeholder="粘贴你的 API Key"
+              autocomplete="off"
+            />
           </label>
           <label class="field">
-            <span>Model</span>
-            <input id="model-input" type="text" placeholder="例如：gpt-4.1-mini" />
+            <span data-i18n="options.model">Model</span>
+            <input
+              id="model-input"
+              type="text"
+              data-i18n-placeholder="options.modelPlaceholder"
+              placeholder="例如：gpt-4.1-mini"
+            />
           </label>
         </div>
 
         <div id="provider-chrome" class="provider-panel" hidden>
           <label class="field">
-            <span>Temperature</span>
+            <span data-i18n="options.temperature">Temperature</span>
             <input id="temperature-input" type="number" min="0" max="2" step="0.1" />
           </label>
           <label class="field">
-            <span>Top-K</span>
+            <span data-i18n="options.topK">Top-K</span>
             <input id="topk-input" type="number" min="1" max="128" step="1" />
           </label>
-          <p class="hint">
+          <p class="hint" data-i18n="options.chromeHint">
             需要 Chrome 138+ 且本机满足 Gemini Nano 内置模型要求。首次使用可能会下载模型。
           </p>
         </div>
@@ -81,46 +94,54 @@
 
       <section class="card split">
         <div>
-          <h2>自动策略</h2>
+          <h2 data-i18n="options.strategy">自动策略</h2>
           <label class="checkbox">
             <input id="enabled-input" type="checkbox" />
-            <span>启用自动打标</span>
+            <span data-i18n="options.enableAuto">启用自动打标</span>
           </label>
           <label class="field">
-            <span>正文采样字符数上限</span>
+            <span data-i18n="options.language">界面语言</span>
+            <select id="language-select">
+              <option value="auto" data-i18n="options.language.auto">跟随浏览器</option>
+              <option value="zh-CN" data-i18n="options.language.zh-CN">简体中文</option>
+              <option value="en" data-i18n="options.language.en">English</option>
+            </select>
+          </label>
+          <label class="field">
+            <span data-i18n="options.contentLimit">正文采样字符数上限</span>
             <input id="content-limit-input" type="number" min="500" max="12000" step="100" />
           </label>
           <label class="field">
-            <span>后台扫描周期（分钟）</span>
+            <span data-i18n="options.alarmMinutes">后台扫描周期（分钟）</span>
             <input id="alarm-minutes-input" type="number" min="1" max="60" step="1" />
           </label>
         </div>
 
         <div>
-          <h2>连接与诊断</h2>
+          <h2 data-i18n="options.diagnostics">连接与诊断</h2>
           <div class="button-row">
-            <button id="test-provider-button" class="secondary-button">测试 Provider</button>
-            <button id="run-now-button" class="secondary-button">立即扫描当前窗口</button>
+            <button id="test-provider-button" class="secondary-button" data-i18n="options.testProvider">测试 Provider</button>
+            <button id="run-now-button" class="secondary-button" data-i18n="options.runNow">立即扫描当前窗口</button>
           </div>
-          <pre id="status-output" class="status-box">尚未执行。</pre>
+          <pre id="status-output" class="status-box" data-i18n="popup.waiting">等待操作。</pre>
         </div>
       </section>
 
       <section class="card split">
         <div>
-          <h2>分类分组规则</h2>
-          <p class="hint">为每个分类指定分组颜色，并设置打标后是否默认折叠。</p>
+          <h2 data-i18n="options.rules">分类分组规则</h2>
+          <p class="hint" data-i18n="options.rulesHint">为每个分类指定分组颜色，并设置打标后是否默认折叠。</p>
           <div id="category-rules" class="rules-list"></div>
         </div>
 
         <div>
-          <h2>分类结果历史</h2>
+          <h2 data-i18n="options.history">分类结果历史</h2>
           <div class="button-row">
-            <button id="refresh-history-button" class="secondary-button">刷新历史</button>
-            <button id="clear-history-button" class="secondary-button">清空历史</button>
+            <button id="refresh-history-button" class="secondary-button" data-i18n="options.refreshHistory">刷新历史</button>
+            <button id="clear-history-button" class="secondary-button" data-i18n="options.clearHistory">清空历史</button>
           </div>
           <div id="history-panel" class="history-panel">
-            <p class="hint">暂无历史记录。</p>
+            <p class="hint" data-i18n="options.history.empty">暂无历史记录。</p>
           </div>
         </div>
       </section>

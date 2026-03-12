@@ -9,6 +9,7 @@ export const STORAGE_KEYS = {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   enabled: true,
+  language: 'auto',
   categories: [],
   categoryRules: {},
   promptSupplement: '',

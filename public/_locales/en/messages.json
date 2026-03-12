@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "AI Tabs Organizer"
+  },
+  "extensionDescription": {
+    "message": "Automatically classify and group tabs with an OpenAI-compatible API or Chrome built-in AI."
+  },
+  "extensionActionTitle": {
+    "message": "AI Tabs Organizer"
+  }
+}

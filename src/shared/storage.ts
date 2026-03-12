@@ -59,6 +59,25 @@ export async function clearClassificationCache(): Promise<void> {
   await chrome.storage.local.remove(STORAGE_KEYS.cache);
 }
 
+export async function removeClassificationRecordsByUrls(urls: string[]): Promise<number> {
+  const targets = new Set(urls.filter(Boolean));
+  if (targets.size === 0) {
+    return 0;
+  }
+
+  const cache = await loadClassificationCache();
+  let removed = 0;
+  for (const [key, record] of Object.entries(cache)) {
+    if (targets.has(record.url)) {
+      delete cache[key];
+      removed += 1;
+    }
+  }
+
+  await saveClassificationCache(cache);
+  return removed;
+}
+
 export async function loadActivityLogs(): Promise<ActivityLogEntry[]> {
   return (await getLocalValue<ActivityLogEntry[]>(STORAGE_KEYS.activityLogs)) ?? [];
 }

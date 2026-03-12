@@ -1,18 +1,21 @@
 import { loadSettings, saveSettings } from '../shared/storage.js';
-import type { PopupSummary, ScanSummary } from '../shared/types.js';
+import { resolveUiLanguage, t } from '../shared/i18n.js';
+import type { PopupSummary, ScanSummary, UiLanguage } from '../shared/types.js';
 import { serializeError } from '../shared/utils.js';
 
 const summaryElement = document.querySelector<HTMLElement>('#summary');
 const resultOutput = document.querySelector<HTMLElement>('#result-output');
 const scanButton = document.querySelector<HTMLButtonElement>('#scan-button');
 const rebuildButton = document.querySelector<HTMLButtonElement>('#rebuild-button');
+const clearCurrentButton = document.querySelector<HTMLButtonElement>('#clear-current-button');
 const clearButton = document.querySelector<HTMLButtonElement>('#clear-button');
 const settingsButton = document.querySelector<HTMLButtonElement>('#settings-button');
 const autoToggle = document.querySelector<HTMLInputElement>('#auto-toggle');
+let currentLanguage: UiLanguage = 'zh-CN';
 
 function assertElement<T>(element: T | null, name: string): T {
   if (!element) {
-    throw new Error(`缺少页面元素：${name}`);
+    throw new Error(`Missing required element: ${name}`);
   }
   return element;
 }
@@ -22,37 +25,82 @@ const ui = {
   resultOutput: assertElement(resultOutput, 'result-output'),
   scanButton: assertElement(scanButton, 'scan-button'),
   rebuildButton: assertElement(rebuildButton, 'rebuild-button'),
+  clearCurrentButton: assertElement(clearCurrentButton, 'clear-current-button'),
   clearButton: assertElement(clearButton, 'clear-button'),
   settingsButton: assertElement(settingsButton, 'settings-button'),
   autoToggle: assertElement(autoToggle, 'auto-toggle')
 };
 
+function applyTranslations(): void {
+  document.documentElement.lang = currentLanguage;
+  document.title = `AI Tabs - ${t(currentLanguage, 'popup.title')}`;
+
+  document.querySelectorAll<HTMLElement>('[data-i18n]').forEach((element) => {
+    const key = element.dataset.i18n as Parameters<typeof t>[1];
+    element.textContent = t(currentLanguage, key);
+  });
+}
+
+function formatProvider(providerType: PopupSummary['providerType']): string {
+  return providerType === 'chrome-built-in'
+    ? t(currentLanguage, 'popup.provider.chrome')
+    : t(currentLanguage, 'popup.provider.openai');
+}
+
+function formatLine(label: string, value: string | number): string {
+  const separator = currentLanguage === 'zh-CN' ? '：' : ': ';
+  return `${label}${separator}${value}`;
+}
+
 function renderSummary(summary: PopupSummary): void {
   ui.summaryElement.innerHTML = [
-    `自动打标：<strong>${summary.enabled ? '已启用' : '已关闭'}</strong>`,
-    `Provider：<strong>${summary.providerType === 'chrome-built-in' ? 'Chrome 内置 AI' : 'OpenAI 兼容接口'}</strong>`,
-    `分类数：<strong>${summary.categoryCount}</strong>`,
-    `当前窗口标签页：<strong>${summary.currentWindowTabCount}</strong>`,
-    `累计已打标页面：<strong>${summary.cachedTaggedCount}</strong>`
+    formatLine(
+      t(currentLanguage, 'popup.summary.enabled'),
+      `<strong>${summary.enabled ? t(currentLanguage, 'popup.autoEnabled') : t(currentLanguage, 'popup.autoDisabled')}</strong>`
+    ),
+    formatLine(
+      t(currentLanguage, 'popup.summary.provider'),
+      `<strong>${formatProvider(summary.providerType)}</strong>`
+    ),
+    formatLine(t(currentLanguage, 'popup.summary.categoryCount'), `<strong>${summary.categoryCount}</strong>`),
+    formatLine(
+      t(currentLanguage, 'popup.summary.windowTabCount'),
+      `<strong>${summary.currentWindowTabCount}</strong>`
+    ),
+    formatLine(
+      t(currentLanguage, 'popup.summary.cachedTaggedCount'),
+      `<strong>${summary.cachedTaggedCount}</strong>`
+    )
   ].join('<br />');
 
   const providerHealth = summary.latestProviderStatus
-    ? `最近 Provider 状态：${summary.latestProviderStatus.ok ? '成功' : '失败'} - ${summary.latestProviderStatus.message}`
-    : '最近 Provider 状态：暂无';
+    ? formatLine(
+        t(currentLanguage, 'popup.latestProviderStatus'),
+        `${summary.latestProviderStatus.ok ? t(currentLanguage, 'popup.providerStatus.success') : t(currentLanguage, 'popup.providerStatus.failure')} - ${summary.latestProviderStatus.message}`
+      )
+    : formatLine(t(currentLanguage, 'popup.latestProviderStatus'), t(currentLanguage, 'popup.none'));
 
   const latestLog = summary.latestLog
     ? [
-        `最近日志：${summary.latestLog.timestamp} ${summary.latestLog.message}`,
-        summary.latestLog.detail ? `日志详情：${summary.latestLog.detail}` : null
+        formatLine(
+          t(currentLanguage, 'popup.latestLog'),
+          `${summary.latestLog.timestamp} ${summary.latestLog.message}`
+        ),
+        summary.latestLog.detail
+          ? formatLine(t(currentLanguage, 'popup.logDetail'), summary.latestLog.detail)
+          : null
       ]
         .filter(Boolean)
         .join('\n')
-    : '最近日志：暂无';
+    : formatLine(t(currentLanguage, 'popup.latestLog'), t(currentLanguage, 'popup.none'));
 
   ui.resultOutput.textContent = `${providerHealth}\n${latestLog}`;
 }
 
 async function refreshSummary(): Promise<void> {
+  const settings = await loadSettings();
+  currentLanguage = resolveUiLanguage(settings.language, chrome.i18n.getUILanguage());
+  applyTranslations();
   const summary = (await chrome.runtime.sendMessage({
     type: 'get-popup-summary'
   })) as PopupSummary;
@@ -61,52 +109,80 @@ async function refreshSummary(): Promise<void> {
 }
 
 async function handleScan(): Promise<void> {
-  ui.resultOutput.textContent = '正在扫描当前窗口...';
+  ui.resultOutput.textContent = t(currentLanguage, 'popup.scanning');
   try {
     const summary = (await chrome.runtime.sendMessage({
       type: 'manual-scan-current-window'
     })) as ScanSummary;
 
     ui.resultOutput.textContent = [
-      `扫描完成：${summary.scanned} 个标签页`,
-      `已打标：${summary.tagged}`,
-      `跳过：${summary.skipped}`,
-      `错误：${summary.errors}`,
+      formatLine(t(currentLanguage, 'popup.scanCount'), summary.scanned),
+      formatLine(t(currentLanguage, 'popup.taggedCount'), summary.tagged),
+      formatLine(t(currentLanguage, 'popup.skippedCount'), summary.skipped),
+      formatLine(t(currentLanguage, 'popup.errorCount'), summary.errors),
       '',
       ...summary.details
     ].join('\n');
 
     await refreshSummary();
   } catch (error) {
-    ui.resultOutput.textContent = `扫描失败：${serializeError(error)}`;
+    ui.resultOutput.textContent = formatLine(
+      t(currentLanguage, 'popup.scanFailed'),
+      serializeError(error)
+    );
   }
 }
 
 async function handleRebuild(): Promise<void> {
-  ui.resultOutput.textContent = '正在重建当前窗口分组...';
+  ui.resultOutput.textContent = t(currentLanguage, 'popup.rebuilding');
   try {
     const summary = (await chrome.runtime.sendMessage({
       type: 'rebuild-current-window'
     })) as ScanSummary;
 
     ui.resultOutput.textContent = [
-      '当前窗口分组已重建。',
-      `扫描：${summary.scanned}`,
-      `已打标：${summary.tagged}`,
-      `跳过：${summary.skipped}`,
-      `错误：${summary.errors}`,
+      t(currentLanguage, 'popup.rebuildDone'),
+      formatLine(t(currentLanguage, 'popup.scanCount'), summary.scanned),
+      formatLine(t(currentLanguage, 'popup.taggedCount'), summary.tagged),
+      formatLine(t(currentLanguage, 'popup.skippedCount'), summary.skipped),
+      formatLine(t(currentLanguage, 'popup.errorCount'), summary.errors),
       '',
       ...summary.details
     ].join('\n');
 
     await refreshSummary();
   } catch (error) {
-    ui.resultOutput.textContent = `重建失败：${serializeError(error)}`;
+    ui.resultOutput.textContent = formatLine(
+      t(currentLanguage, 'popup.rebuildFailed'),
+      serializeError(error)
+    );
+  }
+}
+
+async function handleClearCurrent(): Promise<void> {
+  ui.resultOutput.textContent = t(currentLanguage, 'popup.clearingCurrent');
+  try {
+    const result = (await chrome.runtime.sendMessage({
+      type: 'clear-current-window-grouping-and-records'
+    })) as {
+      ungroupedTabs: number;
+      clearedRecords: number;
+    };
+
+    ui.resultOutput.textContent = [
+      t(currentLanguage, 'popup.clearCurrentDone'),
+      formatLine(t(currentLanguage, 'popup.ungroupedTabs'), result.ungroupedTabs),
+      formatLine(t(currentLanguage, 'popup.clearedRecords'), result.clearedRecords)
+    ].join('\n');
+
+    await refreshSummary();
+  } catch (error) {
+    ui.resultOutput.textContent = `${t(currentLanguage, 'popup.clearFailed')}：${serializeError(error)}`;
   }
 }
 
 async function handleClear(): Promise<void> {
-  ui.resultOutput.textContent = '正在清除所有标签页分组和打标记录...';
+  ui.resultOutput.textContent = t(currentLanguage, 'popup.clearingAll');
   try {
     const result = (await chrome.runtime.sendMessage({
       type: 'clear-all-grouping-and-records'
@@ -117,15 +193,18 @@ async function handleClear(): Promise<void> {
     };
 
     ui.resultOutput.textContent = [
-      '所有标签页分组和打标记录已清除。',
-      `解除分组标签页：${result.ungroupedTabs}`,
-      `清除打标记录：${result.clearedRecords}`,
-      `涉及窗口：${result.touchedWindows}`
+      t(currentLanguage, 'popup.clearAllDone'),
+      formatLine(t(currentLanguage, 'popup.ungroupedTabs'), result.ungroupedTabs),
+      formatLine(t(currentLanguage, 'popup.clearedRecords'), result.clearedRecords),
+      formatLine(t(currentLanguage, 'popup.touchedWindows'), result.touchedWindows)
     ].join('\n');
 
     await refreshSummary();
   } catch (error) {
-    ui.resultOutput.textContent = `清除失败：${serializeError(error)}`;
+    ui.resultOutput.textContent = formatLine(
+      t(currentLanguage, 'popup.clearFailed'),
+      serializeError(error)
+    );
   }
 }
 
@@ -135,6 +214,10 @@ ui.scanButton.addEventListener('click', () => {
 
 ui.rebuildButton.addEventListener('click', () => {
   void handleRebuild();
+});
+
+ui.clearCurrentButton.addEventListener('click', () => {
+  void handleClearCurrent();
 });
 
 ui.clearButton.addEventListener('click', () => {
@@ -156,21 +239,24 @@ ui.autoToggle.addEventListener('change', () => {
           type: 'kickoff-auto-scan'
         })) as ScanSummary;
         ui.resultOutput.textContent = [
-          '自动打标已开启，并已立即执行一次后台扫描。',
-          `扫描：${summary.scanned}`,
-          `已打标：${summary.tagged}`,
-          `跳过：${summary.skipped}`,
-          `错误：${summary.errors}`,
+          t(currentLanguage, 'popup.autoToggleStarted'),
+          formatLine(t(currentLanguage, 'popup.scanCount'), summary.scanned),
+          formatLine(t(currentLanguage, 'popup.taggedCount'), summary.tagged),
+          formatLine(t(currentLanguage, 'popup.skippedCount'), summary.skipped),
+          formatLine(t(currentLanguage, 'popup.errorCount'), summary.errors),
           '',
           ...summary.details
         ].join('\n');
       } else {
-        ui.resultOutput.textContent = '自动打标已关闭。';
+        ui.resultOutput.textContent = t(currentLanguage, 'popup.autoDisabledMessage');
       }
       await refreshSummary();
     } catch (error) {
       ui.autoToggle.checked = !ui.autoToggle.checked;
-      ui.resultOutput.textContent = `切换自动打标失败：${serializeError(error)}`;
+      ui.resultOutput.textContent = formatLine(
+        t(currentLanguage, 'popup.autoToggleFailed'),
+        serializeError(error)
+      );
     }
   })();
 });

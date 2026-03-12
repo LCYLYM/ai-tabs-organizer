@@ -1,5 +1,6 @@
 export type ProviderType = 'openai-compatible' | 'chrome-built-in';
 export type TabGroupColor = chrome.tabGroups.TabGroup['color'];
+export type UiLanguage = 'auto' | 'zh-CN' | 'en';
 
 export interface OpenAiCompatibleConfig {
   baseUrl: string;
@@ -14,6 +15,7 @@ export interface ChromeBuiltInConfig {
 
 export interface AppSettings {
   enabled: boolean;
+  language: UiLanguage;
   categories: string[];
   categoryRules: Record<string, CategoryRule>;
   promptSupplement: string;
@@ -116,6 +118,7 @@ export interface OffscreenClassificationResponse {
 export type RuntimeRequest =
   | { type: 'manual-scan-current-window' }
   | { type: 'rebuild-current-window' }
+  | { type: 'clear-current-window-grouping-and-records' }
   | { type: 'clear-all-grouping-and-records' }
   | { type: 'get-popup-summary' }
   | { type: 'test-openai-provider' }

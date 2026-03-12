@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "AI 标签页自动分类"
+  },
+  "extensionDescription": {
+    "message": "使用 OpenAI 兼容接口或 Chrome 内置 AI 自动为标签页分组与打标。"
+  },
+  "extensionActionTitle": {
+    "message": "AI 标签页自动分类"
+  }
+}

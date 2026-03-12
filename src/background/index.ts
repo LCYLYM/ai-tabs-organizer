@@ -1,8 +1,10 @@
 import { classifyWithOpenAiCompatible } from './openai-compatible-provider.js';
 import { AUTOMATION_ALARM_NAME, STORAGE_KEYS } from '../shared/constants.js';
+import { resolveUiLanguage, t } from '../shared/i18n.js';
 import {
   appendActivityLog,
   clearClassificationCache,
+  removeClassificationRecordsByUrls,
   ensureTrustedStorageAccess,
   loadActivityLogs,
   loadClassificationCache,
@@ -124,6 +126,25 @@ function buildClassificationPayload(
     promptSupplement: settings.promptSupplement,
     pageSignals
   };
+}
+
+function formatUiLine(language: 'zh-CN' | 'en', label: string, value: string): string {
+  return language === 'zh-CN' ? `${label}：${value}` : `${label}: ${value}`;
+}
+
+function formatDominantSignal(language: 'zh-CN' | 'en', signal: ClassificationDecision['dominantSignal']): string {
+  switch (signal) {
+    case 'title':
+      return t(language, 'signal.title');
+    case 'domain':
+      return t(language, 'signal.domain');
+    case 'content':
+      return t(language, 'signal.content');
+    case 'mixed':
+      return t(language, 'signal.mixed');
+    default:
+      return t(language, 'signal.insufficient');
+  }
 }
 
 async function ensureOffscreenDocument(): Promise<void> {
@@ -523,6 +544,42 @@ async function rebuildCurrentWindow(): Promise<ScanSummary> {
   });
 }
 
+async function clearCurrentWindowGroupingAndRecords(): Promise<{
+  ungroupedTabs: number;
+  clearedRecords: number;
+}> {
+  const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
+  const groupedTabIds = tabs
+    .filter(
+      (tab): tab is chrome.tabs.Tab & { id: number } =>
+        Boolean(tab.id) &&
+        tab.groupId !== undefined &&
+        tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE
+    )
+    .map((tab) => tab.id);
+
+  if (groupedTabIds.length > 0) {
+    const singleGroupedTabId = groupedTabIds[0];
+    if (groupedTabIds.length === 1 && singleGroupedTabId !== undefined) {
+      await chrome.tabs.ungroup(singleGroupedTabId);
+    } else {
+      await chrome.tabs.ungroup(groupedTabIds as [number, ...number[]]);
+    }
+  }
+
+  const clearedRecords = await removeClassificationRecordsByUrls(
+    tabs.map((tab) => tab.url).filter((url): url is string => Boolean(url))
+  );
+
+  const result = {
+    ungroupedTabs: groupedTabIds.length,
+    clearedRecords
+  };
+
+  await appendActivityLog('info', '已清除当前窗口标签页分组和打标记录', result);
+  return result;
+}
+
 async function clearAllGroupingAndRecords(): Promise<{
   ungroupedTabs: number;
   clearedRecords: number;
@@ -574,8 +631,16 @@ async function kickoffAutoScan(): Promise<ScanSummary> {
 
 async function testOpenAiProvider(): Promise<string> {
   const settings = await loadSettings();
+  const uiLanguage = resolveUiLanguage(
+    settings.language,
+    chrome.i18n.getUILanguage()
+  ) as 'zh-CN' | 'en';
   if (settings.providerType !== 'openai-compatible') {
-    throw new Error('当前 Provider 不是 OpenAI 兼容接口。');
+    throw new Error(
+      uiLanguage === 'zh-CN'
+        ? '当前 Provider 不是 OpenAI 兼容接口。'
+        : 'The current provider is not an OpenAI-compatible API.'
+    );
   }
 
   const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
@@ -584,7 +649,11 @@ async function testOpenAiProvider(): Promise<string> {
     .sort((left, right) => (right.lastAccessed ?? 0) - (left.lastAccessed ?? 0))[0];
 
   if (!targetTab || !targetTab.id || !targetTab.url) {
-    throw new Error('当前窗口没有可测试的 http/https 网页标签页。');
+    throw new Error(
+      uiLanguage === 'zh-CN'
+        ? '当前窗口没有可测试的 http/https 网页标签页。'
+        : 'There is no testable http/https tab in the current window.'
+    );
   }
 
   const collectedSignals = await collectPageSignals(targetTab, settings);
@@ -593,7 +662,12 @@ async function testOpenAiProvider(): Promise<string> {
     settings.openAiCompatible
   );
 
-  const message = `测试成功：${decision.shouldTag ? `建议分类为 ${decision.category}` : '当前页面不建议打标'}。`;
+  const message =
+    uiLanguage === 'zh-CN'
+      ? `测试成功：${decision.shouldTag ? `建议分类为 ${decision.category}` : '当前页面不建议打标'}。`
+      : `Test successful: ${
+          decision.shouldTag ? `recommended category ${decision.category}` : 'this page should not be tagged'
+        }.`;
   await appendActivityLog('info', 'Provider 测试成功', {
     providerType: 'openai-compatible',
     url: collectedSignals.pageSignals.url,
@@ -613,7 +687,15 @@ async function testOpenAiProvider(): Promise<string> {
     ok: true,
     message
   });
-  return `${message}\n主导信号：${decision.dominantSignal}\n理由：${decision.reason}`;
+  return [
+    message,
+    formatUiLine(
+      uiLanguage,
+      uiLanguage === 'zh-CN' ? '主导信号' : 'Dominant signal',
+      formatDominantSignal(uiLanguage, decision.dominantSignal)
+    ),
+    formatUiLine(uiLanguage, uiLanguage === 'zh-CN' ? '理由' : 'Reason', decision.reason)
+  ].join('\n');
 }
 
 async function buildPopupSummary(): Promise<PopupSummary> {
@@ -714,7 +796,7 @@ chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResp
   if (
     !message ||
     typeof message !== 'object' ||
-    !['manual-scan-current-window', 'rebuild-current-window', 'clear-all-grouping-and-records', 'get-popup-summary', 'test-openai-provider', 'kickoff-auto-scan'].includes(
+    !['manual-scan-current-window', 'rebuild-current-window', 'clear-current-window-grouping-and-records', 'clear-all-grouping-and-records', 'get-popup-summary', 'test-openai-provider', 'kickoff-auto-scan'].includes(
       (message as { type?: string }).type ?? ''
     )
   ) {
@@ -732,6 +814,11 @@ chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResp
         case 'rebuild-current-window': {
           const summary = await rebuildCurrentWindow();
           sendResponse(summary);
+          return;
+        }
+        case 'clear-current-window-grouping-and-records': {
+          const result = await clearCurrentWindowGroupingAndRecords();
+          sendResponse(result);
           return;
         }
         case 'clear-all-grouping-and-records': {

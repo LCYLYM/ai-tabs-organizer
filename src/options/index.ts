@@ -1,5 +1,6 @@
 import { TAB_GROUP_COLOR_OPTIONS } from '../shared/constants.js';
 import { getChromeBuiltInAvailability, warmupChromeBuiltInModel } from '../shared/chrome-built-in-provider.js';
+import { resolveUiLanguage, t } from '../shared/i18n.js';
 import {
   clearClassificationCache,
   loadClassificationCache,
@@ -7,7 +8,14 @@ import {
   saveProviderHealth,
   saveSettings
 } from '../shared/storage.js';
-import type { AppSettings, CategoryRule, ClassificationCacheRecord, ScanSummary } from '../shared/types.js';
+import type {
+  AppSettings,
+  CategoryRule,
+  ClassificationCacheRecord,
+  DominantSignal,
+  ScanSummary,
+  UiLanguage
+} from '../shared/types.js';
 import { prettyJson, sanitizeCategories, serializeError } from '../shared/utils.js';
 
 const categoriesInput = document.querySelector<HTMLTextAreaElement>('#categories-input');
@@ -19,6 +27,7 @@ const modelInput = document.querySelector<HTMLInputElement>('#model-input');
 const temperatureInput = document.querySelector<HTMLInputElement>('#temperature-input');
 const topKInput = document.querySelector<HTMLInputElement>('#topk-input');
 const enabledInput = document.querySelector<HTMLInputElement>('#enabled-input');
+const languageSelect = document.querySelector<HTMLSelectElement>('#language-select');
 const contentLimitInput = document.querySelector<HTMLInputElement>('#content-limit-input');
 const alarmMinutesInput = document.querySelector<HTMLInputElement>('#alarm-minutes-input');
 const saveButton = document.querySelector<HTMLButtonElement>('#save-button');
@@ -32,9 +41,11 @@ const historyPanel = document.querySelector<HTMLElement>('#history-panel');
 const refreshHistoryButton = document.querySelector<HTMLButtonElement>('#refresh-history-button');
 const clearHistoryButton = document.querySelector<HTMLButtonElement>('#clear-history-button');
 
+let currentLanguage: UiLanguage = 'zh-CN';
+
 function assertElement<T>(element: T | null, name: string): T {
   if (!element) {
-    throw new Error(`缺少页面元素：${name}`);
+    throw new Error(`Missing required element: ${name}`);
   }
   return element;
 }
@@ -49,6 +60,7 @@ const ui = {
   temperatureInput: assertElement(temperatureInput, 'temperature-input'),
   topKInput: assertElement(topKInput, 'topk-input'),
   enabledInput: assertElement(enabledInput, 'enabled-input'),
+  languageSelect: assertElement(languageSelect, 'language-select'),
   contentLimitInput: assertElement(contentLimitInput, 'content-limit-input'),
   alarmMinutesInput: assertElement(alarmMinutesInput, 'alarm-minutes-input'),
   saveButton: assertElement(saveButton, 'save-button'),
@@ -63,8 +75,47 @@ const ui = {
   clearHistoryButton: assertElement(clearHistoryButton, 'clear-history-button')
 };
 
+function applyTranslations(): void {
+  document.documentElement.lang = currentLanguage;
+  document.title = `${t(currentLanguage, 'options.title')} - AI Tabs`;
+
+  document.querySelectorAll<HTMLElement>('[data-i18n]').forEach((element) => {
+    const key = element.dataset.i18n as Parameters<typeof t>[1];
+    element.textContent = t(currentLanguage, key);
+  });
+
+  document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-i18n-placeholder]').forEach((element) => {
+    const key = element.dataset.i18nPlaceholder as Parameters<typeof t>[1];
+    element.placeholder = t(currentLanguage, key);
+  });
+}
+
 function setStatus(message: string): void {
   ui.statusOutput.textContent = message;
+}
+
+function formatLine(label: string, value: string | number): string {
+  const separator = currentLanguage === 'zh-CN' ? '：' : ': ';
+  return `${label}${separator}${value}`;
+}
+
+function formatDominantSignal(signal: DominantSignal | undefined): string {
+  switch (signal) {
+    case 'title':
+      return t(currentLanguage, 'signal.title');
+    case 'domain':
+      return t(currentLanguage, 'signal.domain');
+    case 'content':
+      return t(currentLanguage, 'signal.content');
+    case 'mixed':
+      return t(currentLanguage, 'signal.mixed');
+    default:
+      return t(currentLanguage, 'signal.insufficient');
+  }
+}
+
+function resolveLanguageSetting(language: string): UiLanguage {
+  return language === 'zh-CN' || language === 'en' ? language : 'auto';
 }
 
 function toggleProviderPanels(providerType: AppSettings['providerType']): void {
@@ -77,6 +128,7 @@ function readSettingsFromForm(): AppSettings {
   const categories = sanitizeCategories(ui.categoriesInput.value.split('\n'));
   return {
     enabled: ui.enabledInput.checked,
+    language: resolveLanguageSetting(ui.languageSelect.value),
     categories,
     categoryRules: readCategoryRulesFromForm(categories),
     promptSupplement: ui.promptInput.value.trim(),
@@ -97,8 +149,10 @@ function readSettingsFromForm(): AppSettings {
 }
 
 function writeSettingsToForm(settings: AppSettings): void {
+  currentLanguage = resolveUiLanguage(settings.language, chrome.i18n.getUILanguage());
+  applyTranslations();
+
   ui.categoriesInput.value = settings.categories.join('\n');
-  renderCategoryRules(settings.categories, settings.categoryRules);
   ui.promptInput.value = settings.promptSupplement;
   ui.providerSelect.value = settings.providerType;
   ui.baseUrlInput.value = settings.openAiCompatible.baseUrl;
@@ -107,9 +161,11 @@ function writeSettingsToForm(settings: AppSettings): void {
   ui.temperatureInput.value = String(settings.chromeBuiltIn.temperature);
   ui.topKInput.value = String(settings.chromeBuiltIn.topK);
   ui.enabledInput.checked = settings.enabled;
+  ui.languageSelect.value = settings.language;
   ui.contentLimitInput.value = String(settings.contentCharacterLimit);
   ui.alarmMinutesInput.value = String(settings.alarmPeriodMinutes);
   toggleProviderPanels(settings.providerType);
+  renderCategoryRules(settings.categories, settings.categoryRules);
 }
 
 function readCategoryRulesFromForm(categories: string[]): Record<string, CategoryRule> {
@@ -131,12 +187,9 @@ function readCategoryRulesFromForm(categories: string[]): Record<string, Categor
   return rules;
 }
 
-function renderCategoryRules(
-  categories: string[],
-  rules: Record<string, CategoryRule> | undefined
-): void {
+function renderCategoryRules(categories: string[], rules: Record<string, CategoryRule> | undefined): void {
   if (categories.length === 0) {
-    ui.categoryRulesContainer.innerHTML = '<p class="hint">先输入分类名称，才能配置分组规则。</p>';
+    ui.categoryRulesContainer.innerHTML = `<p class="hint">${t(currentLanguage, 'options.rulesHint')}</p>`;
     return;
   }
 
@@ -145,7 +198,7 @@ function renderCategoryRules(
       const safeKey = encodeURIComponent(category);
       const rule = rules?.[category];
       const colorOptions = [
-        '<option value="auto">自动配色</option>',
+        `<option value="auto">${t(currentLanguage, 'options.ruleAutoColor')}</option>`,
         ...TAB_GROUP_COLOR_OPTIONS.map(
           (color) =>
             `<option value="${color}"${rule?.color === color ? ' selected' : ''}>${color}</option>`
@@ -159,14 +212,14 @@ function renderCategoryRules(
           </div>
           <div class="rule-grid">
             <label class="field">
-              <span>分组颜色</span>
+              <span>${t(currentLanguage, 'options.ruleColor')}</span>
               <select data-rule-color="${safeKey}">
                 ${colorOptions}
               </select>
             </label>
             <label class="checkbox">
               <input type="checkbox" data-rule-collapsed="${safeKey}"${rule?.collapsed ? ' checked' : ''} />
-              <span>打标后默认折叠</span>
+              <span>${t(currentLanguage, 'options.ruleCollapsed')}</span>
             </label>
           </div>
         </article>
@@ -186,7 +239,7 @@ async function refreshHistory(): Promise<void> {
 
 function renderHistory(items: ClassificationCacheRecord[]): void {
   if (items.length === 0) {
-    ui.historyPanel.innerHTML = '<p class="hint">暂无历史记录。</p>';
+    ui.historyPanel.innerHTML = `<p class="hint">${t(currentLanguage, 'options.history.empty')}</p>`;
     return;
   }
 
@@ -194,25 +247,42 @@ function renderHistory(items: ClassificationCacheRecord[]): void {
     .map((item) => {
       const evidence = Array.isArray(item.evidence) ? item.evidence : [];
       const headings = Array.isArray(item.headings) ? item.headings : [];
+
       return `
         <article class="history-item">
           <div class="history-head">
             <div class="history-title">${escapeHtml(item.category)}</div>
-            <div class="history-meta">${new Date(item.taggedAt).toLocaleString('zh-CN')}</div>
+            <div class="history-meta">${new Date(item.taggedAt).toLocaleString(currentLanguage === 'zh-CN' ? 'zh-CN' : 'en-US')}</div>
           </div>
           <div class="history-meta">
-            标题：${escapeHtml(item.title || '(无标题)')}<br />
-            域名：${escapeHtml(item.domain || '(未知域名)')}<br />
-            Provider：${item.providerType === 'chrome-built-in' ? 'Chrome 内置 AI' : 'OpenAI 兼容接口'}<br />
-            置信度：${item.confidence == null ? '未提供' : item.confidence.toFixed(2)}<br />
-            主导信号：${escapeHtml(item.dominantSignal || 'insufficient')}<br />
-            内容读取：${item.accessMode === 'full' ? '标题 + 域名 + 正文' : '标题 + 域名（正文不可读取）'}<br />
-            分组 ID：${item.groupId ?? '无'}
+            ${formatLine(t(currentLanguage, 'options.history.title'), escapeHtml(item.title || t(currentLanguage, 'common.noTitle')))}<br />
+            ${formatLine(t(currentLanguage, 'options.history.domain'), escapeHtml(item.domain || t(currentLanguage, 'common.unknownDomain')))}<br />
+            ${formatLine(
+              t(currentLanguage, 'options.history.provider'),
+              item.providerType === 'chrome-built-in'
+                ? t(currentLanguage, 'popup.provider.chrome')
+                : t(currentLanguage, 'popup.provider.openai')
+            )}<br />
+            ${formatLine(
+              t(currentLanguage, 'options.history.confidence'),
+              item.confidence == null ? t(currentLanguage, 'common.notProvided') : item.confidence.toFixed(2)
+            )}<br />
+            ${formatLine(
+              t(currentLanguage, 'options.history.dominantSignal'),
+              formatDominantSignal(item.dominantSignal)
+            )}<br />
+            ${formatLine(
+              t(currentLanguage, 'options.history.accessMode'),
+              item.accessMode === 'full'
+                ? t(currentLanguage, 'options.history.fullAccess')
+                : t(currentLanguage, 'options.history.limitedAccess')
+            )}<br />
+            ${formatLine(t(currentLanguage, 'options.history.groupId'), item.groupId ?? t(currentLanguage, 'common.none'))}
           </div>
-          <div class="history-meta">判断理由：${escapeHtml(item.reason || '模型未提供理由')}</div>
-          <div class="history-meta">关键证据：${evidence.length > 0 ? escapeHtml(evidence.join(' | ')) : '模型未提供证据'}</div>
-          <div class="history-meta">标题摘要：${headings.length > 0 ? escapeHtml(headings.join(' | ')) : '(未读取到标题层级)'}</div>
-          <div class="history-meta">正文摘要：${escapeHtml(item.contentExcerpt || '(未读取到正文内容)')}</div>
+          <div class="history-meta">${formatLine(t(currentLanguage, 'options.history.reason'), escapeHtml(item.reason || t(currentLanguage, 'options.history.noReason')))}</div>
+          <div class="history-meta">${formatLine(t(currentLanguage, 'options.history.evidence'), evidence.length > 0 ? escapeHtml(evidence.join(' | ')) : t(currentLanguage, 'options.history.noEvidence'))}</div>
+          <div class="history-meta">${formatLine(t(currentLanguage, 'options.history.headings'), headings.length > 0 ? escapeHtml(headings.join(' | ')) : t(currentLanguage, 'options.history.noHeadings'))}</div>
+          <div class="history-meta">${formatLine(t(currentLanguage, 'options.history.content'), escapeHtml(item.contentExcerpt || t(currentLanguage, 'options.history.noContent')))}</div>
           <div class="history-url"><a href="${escapeAttribute(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></div>
         </article>
       `;
@@ -238,22 +308,25 @@ async function handleSave(): Promise<void> {
   try {
     const saved = await saveSettings(readSettingsFromForm());
     writeSettingsToForm(saved);
-    setStatus(`保存成功。\n${prettyJson(saved)}`);
+    setStatus(prettyJson(saved));
   } catch (error) {
-    setStatus(`保存失败：${serializeError(error)}`);
+    setStatus(serializeError(error));
   } finally {
     ui.saveButton.disabled = false;
   }
 }
 
 async function handleProviderTest(): Promise<void> {
-  setStatus('正在执行 Provider 测试...');
+  setStatus(t(currentLanguage, 'options.testingProvider'));
   try {
     const settings = await saveSettings(readSettingsFromForm());
     if (settings.providerType === 'chrome-built-in') {
       const availability = await getChromeBuiltInAvailability(settings.chromeBuiltIn);
-      const warmupMessage = availability === 'available' ? '模型已就绪。' : await warmupChromeBuiltInModel(settings.chromeBuiltIn);
-      const message = `Chrome 内置 AI 测试成功。\navailability=${availability}\n${warmupMessage}`;
+      const warmupMessage =
+        availability === 'available'
+          ? t(currentLanguage, 'options.modelReady')
+          : await warmupChromeBuiltInModel(settings.chromeBuiltIn);
+      const message = `availability=${availability}\n${warmupMessage}`;
       await saveProviderHealth({
         checkedAt: new Date().toISOString(),
         providerType: 'chrome-built-in',
@@ -269,17 +342,17 @@ async function handleProviderTest(): Promise<void> {
     })) as { ok: boolean; result?: string; error?: string };
 
     if (!response.ok) {
-      throw new Error(response.error ?? 'OpenAI 兼容 Provider 测试失败。');
+      throw new Error(response.error ?? t(currentLanguage, 'options.providerTestFailed'));
     }
 
-    setStatus(response.result ?? 'Provider 测试完成。');
+    setStatus(response.result ?? t(currentLanguage, 'options.providerTestFinished'));
   } catch (error) {
-    setStatus(`Provider 测试失败：${serializeError(error)}`);
+    setStatus(serializeError(error));
   }
 }
 
 async function handleRunNow(): Promise<void> {
-  setStatus('正在扫描当前窗口...');
+  setStatus('...');
   try {
     const summary = (await chrome.runtime.sendMessage({
       type: 'manual-scan-current-window'
@@ -287,30 +360,39 @@ async function handleRunNow(): Promise<void> {
 
     setStatus(
       [
-        `扫描完成：共 ${summary.scanned} 个标签页`,
-        `已打标：${summary.tagged}`,
-        `跳过：${summary.skipped}`,
-        `错误：${summary.errors}`,
+        `${t(currentLanguage, 'popup.scanCount')}：${summary.scanned}`,
+        `${t(currentLanguage, 'popup.taggedCount')}：${summary.tagged}`,
+        `${t(currentLanguage, 'popup.skippedCount')}：${summary.skipped}`,
+        `${t(currentLanguage, 'popup.errorCount')}：${summary.errors}`,
         '',
         ...summary.details
       ].join('\n')
     );
     await refreshHistory();
   } catch (error) {
-    setStatus(`扫描失败：${serializeError(error)}`);
+    setStatus(serializeError(error));
   }
 }
 
 async function handleClearHistory(): Promise<void> {
   await clearClassificationCache();
   await refreshHistory();
-  setStatus('分类历史已清空。');
+  setStatus(t(currentLanguage, 'options.history.empty'));
 }
 
 ui.providerSelect.addEventListener('change', () => {
   toggleProviderPanels(
     ui.providerSelect.value === 'chrome-built-in' ? 'chrome-built-in' : 'openai-compatible'
   );
+});
+
+ui.languageSelect.addEventListener('change', () => {
+  currentLanguage = resolveUiLanguage(resolveLanguageSetting(ui.languageSelect.value), chrome.i18n.getUILanguage());
+  applyTranslations();
+  const categories = sanitizeCategories(ui.categoriesInput.value.split('\n'));
+  const currentRules = readCategoryRulesFromForm(categories);
+  renderCategoryRules(categories, currentRules);
+  void refreshHistory();
 });
 
 ui.categoriesInput.addEventListener('input', () => {
@@ -343,5 +425,5 @@ void (async () => {
   const settings = await loadSettings();
   writeSettingsToForm(settings);
   await refreshHistory();
-  setStatus('设置已加载。');
+  setStatus('');
 })();

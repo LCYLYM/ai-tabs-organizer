@@ -3,7 +3,8 @@ import type {
   AppSettings,
   CategoryRule,
   ClassificationDecision,
-  TabGroupColor
+  TabGroupColor,
+  UiLanguage
 } from './types.js';
 
 const GROUP_COLORS: TabGroupColor[] = [
@@ -33,6 +34,7 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
   const categories = sanitizeCategories(raw.categories ?? []);
   return {
     enabled: raw.enabled ?? true,
+    language: sanitizeLanguage(raw.language),
     categories,
     categoryRules: sanitizeCategoryRules(raw.categoryRules ?? {}, categories),
     promptSupplement: (raw.promptSupplement ?? '').trim(),
@@ -51,6 +53,10 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     ),
     alarmPeriodMinutes: Math.round(clampNumber(raw.alarmPeriodMinutes ?? 5, 1, 60, 5))
   };
+}
+
+export function sanitizeLanguage(language: unknown): UiLanguage {
+  return language === 'zh-CN' || language === 'en' ? language : 'auto';
 }
 
 export function sanitizeCategoryRules(
