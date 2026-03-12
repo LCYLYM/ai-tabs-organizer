@@ -44,7 +44,7 @@ export type DominantSignal = 'title' | 'domain' | 'content' | 'mixed' | 'insuffi
 export interface ClassificationDecision {
   shouldTag: boolean;
   category: string | null;
-  confidence: number;
+  confidence: number | null;
   reason: string;
   dominantSignal: DominantSignal;
   evidence: string[];
@@ -55,10 +55,19 @@ export interface ClassificationCacheRecord {
   category: string;
   taggedAt: string;
   providerType: ProviderType;
-  confidence: number;
+  confidence: number | null;
   title: string;
   url: string;
   groupId: number | null;
+  domain: string;
+  description: string;
+  headings: string[];
+  contentExcerpt: string;
+  dominantSignal: DominantSignal;
+  reason: string;
+  evidence: string[];
+  accessMode: 'full' | 'limited';
+  accessDetail?: string;
 }
 
 export interface ActivityLogEntry {
@@ -107,7 +116,8 @@ export interface OffscreenClassificationResponse {
 export type RuntimeRequest =
   | { type: 'manual-scan-current-window' }
   | { type: 'get-popup-summary' }
-  | { type: 'test-openai-provider' };
+  | { type: 'test-openai-provider' }
+  | { type: 'kickoff-auto-scan' };
 
 export interface PopupSummary {
   enabled: boolean;

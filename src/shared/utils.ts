@@ -180,6 +180,19 @@ export function clampConfidence(value: unknown): number {
   return Math.min(Math.max(asNumber, 0), 1);
 }
 
+export function parseConfidence(value: unknown): number | null {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  const asNumber = typeof value === 'number' ? value : Number.parseFloat(String(value));
+  if (!Number.isFinite(asNumber)) {
+    return null;
+  }
+
+  return Math.min(Math.max(asNumber, 0), 1);
+}
+
 export function trimLogDetail(detail: unknown): string | undefined {
   if (detail == null) {
     return undefined;
@@ -240,7 +253,7 @@ export function assertValidDecision(
   return {
     shouldTag: shouldTag && Boolean(category),
     category: shouldTag ? category : null,
-    confidence: clampConfidence(decision.confidence),
+    confidence: parseConfidence(decision.confidence),
     reason:
       typeof decision.reason === 'string' && decision.reason.trim()
         ? decision.reason.trim()

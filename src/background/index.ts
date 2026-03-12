@@ -101,6 +101,9 @@ async function isTabEligibleForReason(
   if (tab.status !== 'complete') {
     return false;
   }
+  if (tab.groupId !== undefined && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+    return false;
+  }
 
   if (!requireUnfocused) {
     return true;
@@ -363,13 +366,12 @@ async function processTabForClassification(
   const requireUnfocused = options?.requireUnfocused ?? true;
   const requireAutoEnabled = options?.requireAutoEnabled ?? true;
   if (!(await isTabEligibleForReason(tab, settings, requireUnfocused, requireAutoEnabled))) {
-    return { status: 'skipped', detail: '不满足当前扫描条件。' };
-  }
-
-  const signature = buildPageSignature(tab.url);
-  const existingCache = await loadClassificationCache();
-  if (existingCache[signature]) {
-    return { status: 'skipped', detail: '该页面已经打过标，已跳过。' };
+    const alreadyGrouped =
+      tab.groupId !== undefined && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE;
+    return {
+      status: 'skipped',
+      detail: alreadyGrouped ? '该标签页当前已经在分组中，已跳过。' : '不满足当前扫描条件。'
+    };
   }
 
   processingTabs.add(tab.id);
@@ -400,14 +402,23 @@ async function processTabForClassification(
 
     const groupId = await getOrCreateCategoryGroup(tab.windowId, tab.id, decision.category, settings);
     await upsertClassificationRecord({
-      signature,
+      signature: buildPageSignature(collectedSignals.pageSignals.url),
       category: decision.category,
       taggedAt: new Date().toISOString(),
       providerType: settings.providerType,
       confidence: decision.confidence,
       title: collectedSignals.pageSignals.title,
       url: collectedSignals.pageSignals.url,
-      groupId
+      groupId,
+      domain: collectedSignals.pageSignals.domain,
+      description: collectedSignals.pageSignals.description,
+      headings: collectedSignals.pageSignals.headings,
+      contentExcerpt: collectedSignals.pageSignals.contentExcerpt,
+      dominantSignal: decision.dominantSignal,
+      reason: decision.reason,
+      evidence: decision.evidence,
+      accessMode: collectedSignals.accessMode,
+      accessDetail: collectedSignals.detail
     });
 
     await appendActivityLog('info', '标签页已自动打标', {
@@ -480,6 +491,14 @@ async function scanCurrentWindow(reason: string): Promise<ScanSummary> {
   return scanTabs(tabs, reason, { requireUnfocused: false, requireAutoEnabled: false });
 }
 
+async function kickoffAutoScan(): Promise<ScanSummary> {
+  const tabs = await chrome.tabs.query({});
+  return scanTabs(tabs, 'auto-enabled-kickoff', {
+    requireUnfocused: true,
+    requireAutoEnabled: true
+  });
+}
+
 async function testOpenAiProvider(): Promise<string> {
   const settings = await loadSettings();
   if (settings.providerType !== 'openai-compatible') {
@@ -507,6 +526,9 @@ async function testOpenAiProvider(): Promise<string> {
     url: collectedSignals.pageSignals.url,
     accessMode: collectedSignals.accessMode,
     accessDetail: collectedSignals.detail,
+    title: collectedSignals.pageSignals.title,
+    domain: collectedSignals.pageSignals.domain,
+    contentExcerpt: collectedSignals.pageSignals.contentExcerpt,
     category: decision.category,
     dominantSignal: decision.dominantSignal,
     confidence: decision.confidence,
@@ -552,6 +574,11 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'local' && changes[STORAGE_KEYS.settings]) {
     void syncAlarmWithSettings();
+    const oldSettings = changes[STORAGE_KEYS.settings].oldValue as AppSettings | undefined;
+    const newSettings = changes[STORAGE_KEYS.settings].newValue as AppSettings | undefined;
+    if (!oldSettings?.enabled && newSettings?.enabled) {
+      void kickoffAutoScan();
+    }
   }
 });
 
@@ -613,7 +640,7 @@ chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResp
   if (
     !message ||
     typeof message !== 'object' ||
-    !['manual-scan-current-window', 'get-popup-summary', 'test-openai-provider'].includes(
+    !['manual-scan-current-window', 'get-popup-summary', 'test-openai-provider', 'kickoff-auto-scan'].includes(
       (message as { type?: string }).type ?? ''
     )
   ) {
@@ -636,6 +663,11 @@ chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResp
         case 'test-openai-provider': {
           const result = await testOpenAiProvider();
           sendResponse({ ok: true, result });
+          return;
+        }
+        case 'kickoff-auto-scan': {
+          const summary = await kickoffAutoScan();
+          sendResponse(summary);
           return;
         }
       }

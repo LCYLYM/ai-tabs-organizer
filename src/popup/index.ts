@@ -92,7 +92,22 @@ ui.autoToggle.addEventListener('change', () => {
       const settings = await loadSettings();
       settings.enabled = ui.autoToggle.checked;
       await saveSettings(settings);
-      ui.resultOutput.textContent = `自动打标已${settings.enabled ? '开启' : '关闭'}。`;
+      if (settings.enabled) {
+        const summary = (await chrome.runtime.sendMessage({
+          type: 'kickoff-auto-scan'
+        })) as ScanSummary;
+        ui.resultOutput.textContent = [
+          '自动打标已开启，并已立即执行一次后台扫描。',
+          `扫描：${summary.scanned}`,
+          `已打标：${summary.tagged}`,
+          `跳过：${summary.skipped}`,
+          `错误：${summary.errors}`,
+          '',
+          ...summary.details
+        ].join('\n');
+      } else {
+        ui.resultOutput.textContent = '自动打标已关闭。';
+      }
       await refreshSummary();
     } catch (error) {
       ui.autoToggle.checked = !ui.autoToggle.checked;

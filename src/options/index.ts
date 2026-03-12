@@ -191,8 +191,10 @@ function renderHistory(items: ClassificationCacheRecord[]): void {
   }
 
   ui.historyPanel.innerHTML = items
-    .map(
-      (item) => `
+    .map((item) => {
+      const evidence = Array.isArray(item.evidence) ? item.evidence : [];
+      const headings = Array.isArray(item.headings) ? item.headings : [];
+      return `
         <article class="history-item">
           <div class="history-head">
             <div class="history-title">${escapeHtml(item.category)}</div>
@@ -200,14 +202,21 @@ function renderHistory(items: ClassificationCacheRecord[]): void {
           </div>
           <div class="history-meta">
             标题：${escapeHtml(item.title || '(无标题)')}<br />
+            域名：${escapeHtml(item.domain || '(未知域名)')}<br />
             Provider：${item.providerType === 'chrome-built-in' ? 'Chrome 内置 AI' : 'OpenAI 兼容接口'}<br />
-            置信度：${item.confidence.toFixed(2)}<br />
+            置信度：${item.confidence == null ? '未提供' : item.confidence.toFixed(2)}<br />
+            主导信号：${escapeHtml(item.dominantSignal || 'insufficient')}<br />
+            内容读取：${item.accessMode === 'full' ? '标题 + 域名 + 正文' : '标题 + 域名（正文不可读取）'}<br />
             分组 ID：${item.groupId ?? '无'}
           </div>
+          <div class="history-meta">判断理由：${escapeHtml(item.reason || '模型未提供理由')}</div>
+          <div class="history-meta">关键证据：${evidence.length > 0 ? escapeHtml(evidence.join(' | ')) : '模型未提供证据'}</div>
+          <div class="history-meta">标题摘要：${headings.length > 0 ? escapeHtml(headings.join(' | ')) : '(未读取到标题层级)'}</div>
+          <div class="history-meta">正文摘要：${escapeHtml(item.contentExcerpt || '(未读取到正文内容)')}</div>
           <div class="history-url"><a href="${escapeAttribute(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></div>
         </article>
-      `
-    )
+      `;
+    })
     .join('');
 }
 
