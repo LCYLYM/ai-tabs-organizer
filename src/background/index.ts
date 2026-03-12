@@ -1,0 +1,545 @@
+import { classifyWithOpenAiCompatible } from './openai-compatible-provider.js';
+import { AUTOMATION_ALARM_NAME, STORAGE_KEYS } from '../shared/constants.js';
+import {
+  appendActivityLog,
+  ensureTrustedStorageAccess,
+  loadActivityLogs,
+  loadClassificationCache,
+  loadProviderHealth,
+  loadSettings,
+  saveProviderHealth,
+  upsertClassificationRecord
+} from '../shared/storage.js';
+import type {
+  AppSettings,
+  ClassificationDecision,
+  ClassificationRequestPayload,
+  OffscreenClassificationResponse,
+  PageSignals,
+  PopupSummary,
+  ProviderType,
+  RuntimeRequest,
+  ScanSummary
+} from '../shared/types.js';
+import {
+  buildPageSignature,
+  extractDomain,
+  isHttpUrl,
+  pickGroupColor,
+  serializeError
+} from '../shared/utils.js';
+
+const processingTabs = new Set<number>();
+const activeTabByWindow = new Map<number, number>();
+
+async function bootstrap(): Promise<void> {
+  await ensureTrustedStorageAccess();
+  await syncAlarmWithSettings();
+  const activeTabs = await chrome.tabs.query({ active: true });
+  for (const tab of activeTabs) {
+    if (tab.id && tab.windowId !== undefined) {
+      activeTabByWindow.set(tab.windowId, tab.id);
+    }
+  }
+}
+
+async function syncAlarmWithSettings(): Promise<void> {
+  const settings = await loadSettings();
+  await chrome.alarms.clear(AUTOMATION_ALARM_NAME);
+
+  if (!settings.enabled || settings.categories.length === 0) {
+    return;
+  }
+
+  await chrome.alarms.create(AUTOMATION_ALARM_NAME, {
+    periodInMinutes: settings.alarmPeriodMinutes
+  });
+}
+
+async function getFocusedWindowId(): Promise<number | null> {
+  try {
+    const windows = await chrome.windows.getAll({ populate: false });
+    const focused = windows.find((windowInfo) => windowInfo.focused);
+    return focused?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function isTabEligible(tab: chrome.tabs.Tab, settings: AppSettings): Promise<boolean> {
+  if (!settings.enabled || settings.categories.length === 0) {
+    return false;
+  }
+  if (!tab.id || tab.windowId === undefined || !isHttpUrl(tab.url)) {
+    return false;
+  }
+  if (tab.status !== 'complete') {
+    return false;
+  }
+
+  const focusedWindowId = await getFocusedWindowId();
+  const isFocusedTab = focusedWindowId != null && tab.windowId === focusedWindowId && Boolean(tab.active);
+  return !isFocusedTab;
+}
+
+function buildClassificationPayload(
+  settings: AppSettings,
+  pageSignals: PageSignals
+): ClassificationRequestPayload {
+  return {
+    categories: settings.categories,
+    promptSupplement: settings.promptSupplement,
+    pageSignals
+  };
+}
+
+async function ensureOffscreenDocument(): Promise<void> {
+  const offscreenUrl = chrome.runtime.getURL('offscreen/index.html');
+  const existingContexts = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+    documentUrls: [offscreenUrl]
+  });
+
+  if (existingContexts.length > 0) {
+    return;
+  }
+
+  await chrome.offscreen.createDocument({
+    url: offscreenUrl,
+    reasons: [chrome.offscreen.Reason.WORKERS],
+    justification: '在后台自动分类标签页时运行 Chrome 内置 Prompt API。'
+  });
+}
+
+async function classifyWithChromeBuiltInInOffscreen(
+  payload: ClassificationRequestPayload,
+  settings: AppSettings
+): Promise<ClassificationDecision> {
+  await ensureOffscreenDocument();
+  const requestId = crypto.randomUUID();
+  const response = (await chrome.runtime.sendMessage({
+    type: 'offscreen-classify',
+    requestId,
+    payload,
+    config: settings.chromeBuiltIn
+  })) as OffscreenClassificationResponse | undefined;
+
+  if (!response || response.requestId !== requestId) {
+    throw new Error('未收到离屏文档的分类响应。');
+  }
+
+  if (!response.ok || !response.decision) {
+    throw new Error(response.error ?? '离屏文档分类失败。');
+  }
+
+  return response.decision;
+}
+
+async function classifyPage(
+  payload: ClassificationRequestPayload,
+  settings: AppSettings
+): Promise<ClassificationDecision> {
+  return settings.providerType === 'chrome-built-in'
+    ? classifyWithChromeBuiltInInOffscreen(payload, settings)
+    : classifyWithOpenAiCompatible(payload, settings.openAiCompatible);
+}
+
+async function getOrCreateCategoryGroup(
+  windowId: number,
+  tabId: number,
+  category: string
+): Promise<number> {
+  const existingGroups = await chrome.tabGroups.query({ windowId });
+  const matchingGroup = existingGroups.find((group) => group.title === category);
+
+  if (matchingGroup) {
+    const groupId = await chrome.tabs.group({ groupId: matchingGroup.id, tabIds: [tabId] });
+    await chrome.tabGroups.update(groupId, {
+      title: category,
+      color: pickGroupColor(category),
+      collapsed: false
+    });
+    return groupId;
+  }
+
+  const groupId = await chrome.tabs.group({
+    tabIds: [tabId],
+    createProperties: { windowId }
+  });
+
+  await chrome.tabGroups.update(groupId, {
+    title: category,
+    color: pickGroupColor(category),
+    collapsed: false
+  });
+
+  return groupId;
+}
+
+async function collectPageSignals(tab: chrome.tabs.Tab, settings: AppSettings): Promise<PageSignals> {
+  if (!tab.id || !tab.url) {
+    throw new Error('标签页缺少可用的 id 或 url。');
+  }
+
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: (contentLimit: number) => {
+      const normalize = (value: string | null | undefined): string =>
+        (value ?? '').replace(/\s+/g, ' ').trim();
+
+      const limitText = (value: string, limit: number): string =>
+        value.length <= limit ? value : value.slice(0, limit);
+
+      const readMeta = (selector: string): string => {
+        const element = document.querySelector<HTMLMetaElement>(selector);
+        return normalize(element?.content);
+      };
+
+      const collectText = (root: ParentNode, limit: number): string => {
+        const textParts: string[] = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode(node) {
+            const parentElement = node.parentElement;
+            if (!parentElement) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            const tagName = parentElement.tagName;
+            if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG'].includes(tagName)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return normalize(node.textContent).length > 0
+              ? NodeFilter.FILTER_ACCEPT
+              : NodeFilter.FILTER_REJECT;
+          }
+        });
+
+        while (walker.nextNode()) {
+          const currentText = normalize(walker.currentNode.textContent);
+          if (!currentText) {
+            continue;
+          }
+          textParts.push(currentText);
+          if (textParts.join(' ').length >= limit) {
+            break;
+          }
+        }
+
+        return limitText(textParts.join(' '), limit);
+      };
+
+      const mainRoot =
+        document.querySelector('main, article, [role="main"], [data-testid="article"]') ??
+        document.body;
+
+      return {
+        title: normalize(document.title),
+        description:
+          readMeta('meta[name="description"]') || readMeta('meta[property="og:description"]'),
+        headings: Array.from(document.querySelectorAll('h1, h2, h3'))
+          .map((heading) => normalize(heading.textContent))
+          .filter(Boolean)
+          .slice(0, 12),
+        contentExcerpt: collectText(mainRoot, contentLimit),
+        language: normalize(document.documentElement.lang) || null
+      };
+    },
+    args: [settings.contentCharacterLimit]
+  });
+
+  const extracted = results[0]?.result as
+    | {
+        title?: string;
+        description?: string;
+        headings?: string[];
+        contentExcerpt?: string;
+        language?: string | null;
+      }
+    | undefined;
+
+  return {
+    url: tab.url,
+    domain: extractDomain(tab.url),
+    title: extracted?.title?.trim() || tab.title || '',
+    description: extracted?.description?.trim() || '',
+    headings: Array.isArray(extracted?.headings) ? extracted.headings : [],
+    contentExcerpt: extracted?.contentExcerpt?.trim() || '',
+    language: extracted?.language ?? null
+  };
+}
+
+async function processTabForClassification(
+  tab: chrome.tabs.Tab,
+  settings: AppSettings,
+  reason: string
+): Promise<'tagged' | 'skipped'> {
+  if (!tab.id || tab.windowId === undefined || !tab.url) {
+    return 'skipped';
+  }
+
+  if (processingTabs.has(tab.id)) {
+    return 'skipped';
+  }
+
+  if (!(await isTabEligible(tab, settings))) {
+    return 'skipped';
+  }
+
+  const signature = buildPageSignature(tab.url, tab.title ?? '');
+  const existingCache = await loadClassificationCache();
+  if (existingCache[signature]) {
+    return 'skipped';
+  }
+
+  processingTabs.add(tab.id);
+
+  try {
+    const pageSignals = await collectPageSignals(tab, settings);
+    const payload = buildClassificationPayload(settings, pageSignals);
+    const decision = await classifyPage(payload, settings);
+
+    if (!decision.shouldTag || !decision.category) {
+      await appendActivityLog('info', '分类完成但未执行打标', {
+        tabId: tab.id,
+        reason,
+        url: tab.url,
+        decision
+      });
+      return 'skipped';
+    }
+
+    const groupId = await getOrCreateCategoryGroup(tab.windowId, tab.id, decision.category);
+    await upsertClassificationRecord({
+      signature,
+      category: decision.category,
+      taggedAt: new Date().toISOString(),
+      providerType: settings.providerType,
+      confidence: decision.confidence,
+      title: pageSignals.title,
+      url: pageSignals.url,
+      groupId
+    });
+
+    await appendActivityLog('info', '标签页已自动打标', {
+      tabId: tab.id,
+      reason,
+      category: decision.category,
+      confidence: decision.confidence,
+      dominantSignal: decision.dominantSignal,
+      url: tab.url
+    });
+
+    return 'tagged';
+  } finally {
+    processingTabs.delete(tab.id);
+  }
+}
+
+async function scanTabs(
+  tabs: chrome.tabs.Tab[],
+  reason: string
+): Promise<ScanSummary> {
+  const settings = await loadSettings();
+  const summary: ScanSummary = {
+    scanned: 0,
+    tagged: 0,
+    skipped: 0,
+    errors: 0,
+    details: []
+  };
+
+  for (const tab of tabs) {
+    if (!tab.id) {
+      continue;
+    }
+
+    summary.scanned += 1;
+    try {
+      const outcome = await processTabForClassification(tab, settings, reason);
+      if (outcome === 'tagged') {
+        summary.tagged += 1;
+        summary.details.push(`tab ${tab.id}: 已分组`);
+      } else {
+        summary.skipped += 1;
+      }
+    } catch (error) {
+      summary.errors += 1;
+      const message = serializeError(error);
+      summary.details.push(`tab ${tab.id}: ${message}`);
+      await appendActivityLog('error', '标签页自动分类失败', {
+        tabId: tab.id,
+        reason,
+        error: message,
+        url: tab.url
+      });
+    }
+  }
+
+  return summary;
+}
+
+async function scanCurrentWindow(reason: string): Promise<ScanSummary> {
+  const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
+  return scanTabs(tabs, reason);
+}
+
+async function testOpenAiProvider(): Promise<string> {
+  const settings = await loadSettings();
+  if (settings.providerType !== 'openai-compatible') {
+    throw new Error('当前 Provider 不是 OpenAI 兼容接口。');
+  }
+
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!activeTab || !activeTab.id || !activeTab.url) {
+    throw new Error('未找到当前激活标签页，无法执行真实测试。');
+  }
+
+  const pageSignals = await collectPageSignals(activeTab, settings);
+  const decision = await classifyWithOpenAiCompatible(
+    buildClassificationPayload(settings, pageSignals),
+    settings.openAiCompatible
+  );
+
+  const message = `测试成功：${decision.shouldTag ? `建议分类为 ${decision.category}` : '当前页面不建议打标'}。`;
+  await saveProviderHealth({
+    checkedAt: new Date().toISOString(),
+    providerType: 'openai-compatible',
+    ok: true,
+    message
+  });
+  return `${message}\n主导信号：${decision.dominantSignal}\n理由：${decision.reason}`;
+}
+
+async function buildPopupSummary(): Promise<PopupSummary> {
+  const [settings, cache, logs, providerHealth, currentTabs] = await Promise.all([
+    loadSettings(),
+    loadClassificationCache(),
+    loadActivityLogs(),
+    loadProviderHealth(),
+    chrome.tabs.query({ lastFocusedWindow: true })
+  ]);
+
+  return {
+    enabled: settings.enabled,
+    providerType: settings.providerType,
+    categoryCount: settings.categories.length,
+    currentWindowTabCount: currentTabs.length,
+    cachedTaggedCount: Object.keys(cache).length,
+    latestLog: logs[0],
+    latestProviderStatus: providerHealth
+  };
+}
+
+chrome.runtime.onInstalled.addListener((_details) => {
+  void bootstrap();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void bootstrap();
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes[STORAGE_KEYS.settings]) {
+    void syncAlarmWithSettings();
+  }
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== AUTOMATION_ALARM_NAME) {
+    return;
+  }
+
+  void (async () => {
+    const tabs = await chrome.tabs.query({});
+    await scanTabs(tabs, 'periodic-alarm');
+  })();
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  const previousTabId = activeTabByWindow.get(activeInfo.windowId);
+  activeTabByWindow.set(activeInfo.windowId, activeInfo.tabId);
+
+  void (async () => {
+    if (!previousTabId) {
+      return;
+    }
+
+    const previousTab = await chrome.tabs.get(previousTabId);
+    const settings = await loadSettings();
+    await processTabForClassification(previousTab, settings, 'tab-deactivated');
+  })();
+});
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+    return;
+  }
+
+  void (async () => {
+    const tabs = await chrome.tabs.query({ active: true });
+    await scanTabs(tabs, 'window-blurred');
+  })();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!('status' in changeInfo) && !('url' in changeInfo) && !('title' in changeInfo)) {
+    return;
+  }
+
+  void (async () => {
+    if (!tab.url || !isHttpUrl(tab.url)) {
+      return;
+    }
+
+    if (changeInfo.status === 'complete' && !tab.active) {
+      const settings = await loadSettings();
+      await processTabForClassification(await chrome.tabs.get(tabId), settings, 'tab-updated');
+    }
+  })();
+});
+
+chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResponse) => {
+  if (
+    !message ||
+    typeof message !== 'object' ||
+    !['manual-scan-current-window', 'get-popup-summary', 'test-openai-provider'].includes(
+      (message as { type?: string }).type ?? ''
+    )
+  ) {
+    return undefined;
+  }
+
+  void (async () => {
+    try {
+      switch (message.type) {
+        case 'manual-scan-current-window': {
+          const summary = await scanCurrentWindow('manual-scan');
+          sendResponse(summary);
+          return;
+        }
+        case 'get-popup-summary': {
+          const summary = await buildPopupSummary();
+          sendResponse(summary);
+          return;
+        }
+        case 'test-openai-provider': {
+          const result = await testOpenAiProvider();
+          sendResponse({ ok: true, result });
+          return;
+        }
+      }
+    } catch (error) {
+      const messageText = serializeError(error);
+      await saveProviderHealth({
+        checkedAt: new Date().toISOString(),
+        providerType: (await loadSettings()).providerType as ProviderType,
+        ok: false,
+        message: messageText
+      });
+      sendResponse({ ok: false, error: messageText });
+    }
+  })();
+
+  return true;
+});
+
+void bootstrap();

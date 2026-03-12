@@ -1,0 +1,203 @@
+import type { ActivityLogEntry, AppSettings, ClassificationDecision } from './types.js';
+
+type TabGroupColor = chrome.tabGroups.TabGroup['color'];
+
+const GROUP_COLORS: TabGroupColor[] = [
+  'blue',
+  'cyan',
+  'green',
+  'orange',
+  'pink',
+  'purple',
+  'red',
+  'yellow',
+  'grey'
+];
+
+export function sanitizeCategories(categories: string[]): string[] {
+  const unique = new Set<string>();
+  for (const category of categories) {
+    const normalized = category.trim();
+    if (normalized) {
+      unique.add(normalized);
+    }
+  }
+  return [...unique];
+}
+
+export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
+  return {
+    enabled: raw.enabled ?? true,
+    categories: sanitizeCategories(raw.categories ?? []),
+    promptSupplement: (raw.promptSupplement ?? '').trim(),
+    providerType: raw.providerType === 'chrome-built-in' ? 'chrome-built-in' : 'openai-compatible',
+    openAiCompatible: {
+      baseUrl: normalizeBaseUrl(raw.openAiCompatible?.baseUrl ?? 'https://api.openai.com/v1'),
+      apiKey: (raw.openAiCompatible?.apiKey ?? '').trim(),
+      model: (raw.openAiCompatible?.model ?? '').trim()
+    },
+    chromeBuiltIn: {
+      temperature: clampNumber(raw.chromeBuiltIn?.temperature ?? 0.2, 0, 2, 0.2),
+      topK: Math.round(clampNumber(raw.chromeBuiltIn?.topK ?? 3, 1, 128, 3))
+    },
+    contentCharacterLimit: Math.round(
+      clampNumber(raw.contentCharacterLimit ?? 2400, 500, 12000, 2400)
+    ),
+    alarmPeriodMinutes: Math.round(clampNumber(raw.alarmPeriodMinutes ?? 5, 1, 60, 5))
+  };
+}
+
+export function normalizeBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return 'https://api.openai.com/v1';
+  }
+
+  try {
+    const url = new URL(trimmed);
+    url.hash = '';
+    if (url.pathname.endsWith('/')) {
+      url.pathname = url.pathname.slice(0, -1);
+    }
+    return url.toString();
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
+export function buildResponsesEndpoint(baseUrl: string): string {
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (normalized.endsWith('/responses')) {
+    return normalized;
+  }
+
+  return normalized.endsWith('/v1') ? `${normalized}/responses` : `${normalized}/v1/responses`;
+}
+
+export function extractDomain(url: string): string {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+export function isHttpUrl(url: string | undefined): boolean {
+  return Boolean(url && /^https?:\/\//i.test(url));
+}
+
+export function computeStableHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+export function buildPageSignature(url: string, title: string): string {
+  return computeStableHash(`${url.trim()}::${title.trim()}`);
+}
+
+export function limitText(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+  return normalized.slice(0, limit);
+}
+
+export function pickGroupColor(category: string): TabGroupColor {
+  const hash = Number.parseInt(computeStableHash(category), 16);
+  return GROUP_COLORS[hash % GROUP_COLORS.length] ?? 'grey';
+}
+
+export function serializeError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  return JSON.stringify(error);
+}
+
+export function prettyJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+export function clampNumber(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+export function clampConfidence(value: unknown): number {
+  const asNumber = typeof value === 'number' ? value : Number.parseFloat(String(value ?? '0'));
+  if (!Number.isFinite(asNumber)) {
+    return 0;
+  }
+  return Math.min(Math.max(asNumber, 0), 1);
+}
+
+export function trimLogDetail(detail: unknown): string | undefined {
+  if (detail == null) {
+    return undefined;
+  }
+  const serialized = typeof detail === 'string' ? detail : prettyJson(detail);
+  return serialized.length > 1200 ? `${serialized.slice(0, 1197)}...` : serialized;
+}
+
+export function buildLogEntry(
+  level: ActivityLogEntry['level'],
+  message: string,
+  detail?: unknown
+): ActivityLogEntry {
+  return {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    detail: trimLogDetail(detail)
+  };
+}
+
+export function assertValidDecision(
+  decision: Partial<ClassificationDecision>,
+  categories: string[]
+): ClassificationDecision {
+  const allowedSignals = new Set<ClassificationDecision['dominantSignal']>([
+    'title',
+    'domain',
+    'content',
+    'mixed',
+    'insufficient'
+  ]);
+
+  const shouldTag = Boolean(decision.shouldTag);
+  const category =
+    typeof decision.category === 'string' && categories.includes(decision.category)
+      ? decision.category
+      : null;
+
+  return {
+    shouldTag: shouldTag && Boolean(category),
+    category: shouldTag ? category : null,
+    confidence: clampConfidence(decision.confidence),
+    reason:
+      typeof decision.reason === 'string' && decision.reason.trim()
+        ? decision.reason.trim()
+        : '模型未提供理由。',
+    dominantSignal: allowedSignals.has(decision.dominantSignal ?? 'insufficient')
+      ? (decision.dominantSignal as ClassificationDecision['dominantSignal'])
+      : 'insufficient',
+    evidence: Array.isArray(decision.evidence)
+      ? decision.evidence
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+          .slice(0, 5)
+      : []
+  };
+}

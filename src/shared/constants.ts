@@ -1,0 +1,30 @@
+import type { AppSettings } from './types.js';
+
+export const STORAGE_KEYS = {
+  settings: 'appSettings',
+  cache: 'classificationCache',
+  activityLogs: 'activityLogs',
+  providerHealth: 'providerHealth'
+} as const;
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  enabled: true,
+  categories: [],
+  promptSupplement: '',
+  providerType: 'openai-compatible',
+  openAiCompatible: {
+    baseUrl: 'https://api.openai.com/v1',
+    apiKey: '',
+    model: ''
+  },
+  chromeBuiltIn: {
+    temperature: 0.2,
+    topK: 3
+  },
+  contentCharacterLimit: 2400,
+  alarmPeriodMinutes: 5
+};
+
+export const MAX_ACTIVITY_LOGS = 60;
+export const MAX_CACHE_RECORDS = 500;
+export const AUTOMATION_ALARM_NAME = 'auto-classify-tabs';
