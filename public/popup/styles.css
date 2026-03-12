@@ -1,0 +1,88 @@
+:root {
+  --bg: #f4f7f4;
+  --panel: #ffffff;
+  --text: #20302b;
+  --muted: #587168;
+  --accent: #0f7a5c;
+  --accent-soft: rgba(15, 122, 92, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 360px;
+  min-height: 420px;
+  font-family: "PingFang SC", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+  background:
+    radial-gradient(circle at top right, rgba(15, 122, 92, 0.14), transparent 32%),
+    linear-gradient(180deg, #f8fbf9 0%, var(--bg) 100%);
+  color: var(--text);
+}
+
+.popup {
+  padding: 20px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+h1 {
+  margin: 0 0 18px;
+  font-size: 24px;
+  font-family: "Source Han Serif SC", "Songti SC", serif;
+}
+
+.summary,
+.result-box {
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 0 18px 34px rgba(43, 84, 69, 0.12);
+}
+
+.summary {
+  padding: 16px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.button-column {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.primary-button,
+.secondary-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.primary-button {
+  background: linear-gradient(135deg, var(--accent) 0%, #1aa47f 100%);
+  color: #fff;
+}
+
+.secondary-button {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.result-box {
+  min-height: 164px;
+  padding: 16px;
+  white-space: pre-wrap;
+  margin: 0;
+  color: var(--text);
+}

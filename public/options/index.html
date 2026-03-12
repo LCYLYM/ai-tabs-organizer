@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 标签页自动分类 - 设置</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">AI Tabs Organizer</p>
+          <h1>中文标签页自动分类设置</h1>
+          <p class="intro">
+            配置分类目标、AI Provider 和自动打标策略。扩展只会在标签页未获得焦点且当前页面尚未被打标时触发分类。
+          </p>
+        </div>
+        <button id="save-button" class="primary-button">保存设置</button>
+      </header>
+
+      <section class="card">
+        <h2>分类目标</h2>
+        <label class="field">
+          <span>分类名称</span>
+          <textarea
+            id="categories-input"
+            rows="6"
+            placeholder="每行一个分类，例如：工作项目&#10;学习资料&#10;待办处理"
+          ></textarea>
+        </label>
+        <label class="field">
+          <span>补充提示词</span>
+          <textarea
+            id="prompt-input"
+            rows="5"
+            placeholder="可选。补充你的分类原则、业务语境、禁忌或优先规则。"
+          ></textarea>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Provider</h2>
+        <label class="field">
+          <span>AI Provider</span>
+          <select id="provider-select">
+            <option value="openai-compatible">OpenAI 兼容接口</option>
+            <option value="chrome-built-in">AI 语义解析（Chrome 内置 Prompt API）</option>
+          </select>
+        </label>
+
+        <div id="provider-openai" class="provider-panel">
+          <label class="field">
+            <span>Base URL</span>
+            <input id="base-url-input" type="url" placeholder="https://api.openai.com/v1" />
+          </label>
+          <label class="field">
+            <span>API Key</span>
+            <input id="api-key-input" type="password" placeholder="sk-..." autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Model</span>
+            <input id="model-input" type="text" placeholder="例如：gpt-4.1-mini" />
+          </label>
+        </div>
+
+        <div id="provider-chrome" class="provider-panel" hidden>
+          <label class="field">
+            <span>Temperature</span>
+            <input id="temperature-input" type="number" min="0" max="2" step="0.1" />
+          </label>
+          <label class="field">
+            <span>Top-K</span>
+            <input id="topk-input" type="number" min="1" max="128" step="1" />
+          </label>
+          <p class="hint">
+            需要 Chrome 138+ 且本机满足 Gemini Nano 内置模型要求。首次使用可能会下载模型。
+          </p>
+        </div>
+      </section>
+
+      <section class="card split">
+        <div>
+          <h2>自动策略</h2>
+          <label class="checkbox">
+            <input id="enabled-input" type="checkbox" />
+            <span>启用自动打标</span>
+          </label>
+          <label class="field">
+            <span>正文采样字符数上限</span>
+            <input id="content-limit-input" type="number" min="500" max="12000" step="100" />
+          </label>
+          <label class="field">
+            <span>后台扫描周期（分钟）</span>
+            <input id="alarm-minutes-input" type="number" min="1" max="60" step="1" />
+          </label>
+        </div>
+
+        <div>
+          <h2>连接与诊断</h2>
+          <div class="button-row">
+            <button id="test-provider-button" class="secondary-button">测试 Provider</button>
+            <button id="run-now-button" class="secondary-button">立即扫描当前窗口</button>
+          </div>
+          <pre id="status-output" class="status-box">尚未执行。</pre>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="index.js"></script>
+  </body>
+</html>
