@@ -1,13 +1,14 @@
 {
   "name": "aitabs-organizer",
-  "version": "0.1.0",
+  "version": "0.0.0.1",
   "private": true,
   "description": "中文 AI 标签页自动分类 Chrome 扩展",
   "type": "module",
   "scripts": {
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc -p tsconfig.json && node scripts/copy-static.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package:store": "npm run build && node scripts/package-store.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.24",

@@ -47,9 +47,11 @@ scripts/       构建辅助脚本
 npm install
 npm run typecheck
 npm run build
+npm run package:store
 ```
 
 构建产物位于 `dist/`，在 Chrome 扩展管理页中以“加载已解压的扩展程序”方式加载 `dist` 目录即可。
+用于 Chrome Web Store 上传的 ZIP 包会生成到 `artifacts/` 目录，并确保 `manifest.json` 位于 ZIP 根目录。
 
 ## 使用方式
 
