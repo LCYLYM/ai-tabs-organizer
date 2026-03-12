@@ -115,6 +115,8 @@ export interface OffscreenClassificationResponse {
 
 export type RuntimeRequest =
   | { type: 'manual-scan-current-window' }
+  | { type: 'rebuild-current-window' }
+  | { type: 'clear-all-grouping-and-records' }
   | { type: 'get-popup-summary' }
   | { type: 'test-openai-provider' }
   | { type: 'kickoff-auto-scan' };

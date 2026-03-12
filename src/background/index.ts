@@ -2,6 +2,7 @@ import { classifyWithOpenAiCompatible } from './openai-compatible-provider.js';
 import { AUTOMATION_ALARM_NAME, STORAGE_KEYS } from '../shared/constants.js';
 import {
   appendActivityLog,
+  clearClassificationCache,
   ensureTrustedStorageAccess,
   loadActivityLogs,
   loadClassificationCache,
@@ -491,6 +492,67 @@ async function scanCurrentWindow(reason: string): Promise<ScanSummary> {
   return scanTabs(tabs, reason, { requireUnfocused: false, requireAutoEnabled: false });
 }
 
+async function rebuildCurrentWindow(): Promise<ScanSummary> {
+  const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
+  const groupedTabIds = tabs
+    .filter(
+      (tab): tab is chrome.tabs.Tab & { id: number } =>
+        Boolean(tab.id) &&
+        tab.groupId !== undefined &&
+        tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE
+    )
+    .map((tab) => tab.id);
+
+  if (groupedTabIds.length > 0) {
+    await chrome.tabs.ungroup(groupedTabIds);
+  }
+
+  await appendActivityLog('info', '已触发当前窗口重建分组', {
+    tabCount: tabs.length,
+    ungroupedTabCount: groupedTabIds.length
+  });
+
+  return scanTabs(tabs, 'rebuild-current-window', {
+    requireUnfocused: false,
+    requireAutoEnabled: false
+  });
+}
+
+async function clearAllGroupingAndRecords(): Promise<{
+  ungroupedTabs: number;
+  clearedRecords: number;
+  touchedWindows: number;
+}> {
+  const [tabs, cache] = await Promise.all([chrome.tabs.query({}), loadClassificationCache()]);
+  const groupedTabs = tabs.filter(
+    (tab): tab is chrome.tabs.Tab & { id: number } =>
+      Boolean(tab.id) &&
+      tab.groupId !== undefined &&
+      tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE
+  );
+
+  if (groupedTabs.length > 0) {
+    await chrome.tabs.ungroup(groupedTabs.map((tab) => tab.id));
+  }
+
+  await clearClassificationCache();
+
+  const touchedWindows = new Set(
+    groupedTabs
+      .map((tab) => tab.windowId)
+      .filter((windowId): windowId is number => windowId !== undefined)
+  ).size;
+
+  const result = {
+    ungroupedTabs: groupedTabs.length,
+    clearedRecords: Object.keys(cache).length,
+    touchedWindows
+  };
+
+  await appendActivityLog('info', '已清除所有标签页分组和打标记录', result);
+  return result;
+}
+
 async function kickoffAutoScan(): Promise<ScanSummary> {
   const tabs = await chrome.tabs.query({});
   return scanTabs(tabs, 'auto-enabled-kickoff', {
@@ -641,7 +703,7 @@ chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResp
   if (
     !message ||
     typeof message !== 'object' ||
-    !['manual-scan-current-window', 'get-popup-summary', 'test-openai-provider', 'kickoff-auto-scan'].includes(
+    !['manual-scan-current-window', 'rebuild-current-window', 'clear-all-grouping-and-records', 'get-popup-summary', 'test-openai-provider', 'kickoff-auto-scan'].includes(
       (message as { type?: string }).type ?? ''
     )
   ) {
@@ -654,6 +716,16 @@ chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResp
         case 'manual-scan-current-window': {
           const summary = await scanCurrentWindow('manual-scan');
           sendResponse(summary);
+          return;
+        }
+        case 'rebuild-current-window': {
+          const summary = await rebuildCurrentWindow();
+          sendResponse(summary);
+          return;
+        }
+        case 'clear-all-grouping-and-records': {
+          const result = await clearAllGroupingAndRecords();
+          sendResponse(result);
           return;
         }
         case 'get-popup-summary': {

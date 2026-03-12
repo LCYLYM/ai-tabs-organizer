@@ -5,6 +5,8 @@ import { serializeError } from '../shared/utils.js';
 const summaryElement = document.querySelector<HTMLElement>('#summary');
 const resultOutput = document.querySelector<HTMLElement>('#result-output');
 const scanButton = document.querySelector<HTMLButtonElement>('#scan-button');
+const rebuildButton = document.querySelector<HTMLButtonElement>('#rebuild-button');
+const clearButton = document.querySelector<HTMLButtonElement>('#clear-button');
 const settingsButton = document.querySelector<HTMLButtonElement>('#settings-button');
 const autoToggle = document.querySelector<HTMLInputElement>('#auto-toggle');
 
@@ -19,6 +21,8 @@ const ui = {
   summaryElement: assertElement(summaryElement, 'summary'),
   resultOutput: assertElement(resultOutput, 'result-output'),
   scanButton: assertElement(scanButton, 'scan-button'),
+  rebuildButton: assertElement(rebuildButton, 'rebuild-button'),
+  clearButton: assertElement(clearButton, 'clear-button'),
   settingsButton: assertElement(settingsButton, 'settings-button'),
   autoToggle: assertElement(autoToggle, 'auto-toggle')
 };
@@ -78,8 +82,63 @@ async function handleScan(): Promise<void> {
   }
 }
 
+async function handleRebuild(): Promise<void> {
+  ui.resultOutput.textContent = '正在重建当前窗口分组...';
+  try {
+    const summary = (await chrome.runtime.sendMessage({
+      type: 'rebuild-current-window'
+    })) as ScanSummary;
+
+    ui.resultOutput.textContent = [
+      '当前窗口分组已重建。',
+      `扫描：${summary.scanned}`,
+      `已打标：${summary.tagged}`,
+      `跳过：${summary.skipped}`,
+      `错误：${summary.errors}`,
+      '',
+      ...summary.details
+    ].join('\n');
+
+    await refreshSummary();
+  } catch (error) {
+    ui.resultOutput.textContent = `重建失败：${serializeError(error)}`;
+  }
+}
+
+async function handleClear(): Promise<void> {
+  ui.resultOutput.textContent = '正在清除所有标签页分组和打标记录...';
+  try {
+    const result = (await chrome.runtime.sendMessage({
+      type: 'clear-all-grouping-and-records'
+    })) as {
+      ungroupedTabs: number;
+      clearedRecords: number;
+      touchedWindows: number;
+    };
+
+    ui.resultOutput.textContent = [
+      '所有标签页分组和打标记录已清除。',
+      `解除分组标签页：${result.ungroupedTabs}`,
+      `清除打标记录：${result.clearedRecords}`,
+      `涉及窗口：${result.touchedWindows}`
+    ].join('\n');
+
+    await refreshSummary();
+  } catch (error) {
+    ui.resultOutput.textContent = `清除失败：${serializeError(error)}`;
+  }
+}
+
 ui.scanButton.addEventListener('click', () => {
   void handleScan();
+});
+
+ui.rebuildButton.addEventListener('click', () => {
+  void handleRebuild();
+});
+
+ui.clearButton.addEventListener('click', () => {
+  void handleClear();
 });
 
 ui.settingsButton.addEventListener('click', () => {
