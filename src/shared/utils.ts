@@ -94,13 +94,36 @@ export function normalizeBaseUrl(baseUrl: string): string {
 
 export function buildChatCompletionsEndpoint(baseUrl: string): string {
   const normalized = normalizeBaseUrl(baseUrl);
-  if (normalized.endsWith('/chat/completions')) {
-    return normalized;
-  }
+  try {
+    const url = new URL(normalized);
+    const pathname = url.pathname.replace(/\/+$/, '');
 
-  return normalized.endsWith('/v1')
-    ? `${normalized}/chat/completions`
-    : `${normalized}/v1/chat/completions`;
+    if (pathname.endsWith('/chat/completions')) {
+      return url.toString();
+    }
+
+    const segments = pathname.split('/').filter(Boolean);
+    const hasVersionSegment = segments.some((segment) =>
+      /^v\d+(?:(?:alpha|beta|rc)\d*|[._-][a-z0-9-]+)*$/i.test(segment)
+    );
+
+    url.pathname =
+      pathname === ''
+        ? '/v1/chat/completions'
+        : hasVersionSegment
+          ? `${pathname}/chat/completions`
+          : `${pathname}/v1/chat/completions`;
+
+    return url.toString();
+  } catch {
+    if (normalized.endsWith('/chat/completions')) {
+      return normalized;
+    }
+
+    return normalized.endsWith('/v1')
+      ? `${normalized}/chat/completions`
+      : `${normalized}/v1/chat/completions`;
+  }
 }
 
 export function extractDomain(url: string): string {

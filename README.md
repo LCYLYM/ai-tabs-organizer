@@ -4,6 +4,13 @@
 
 隐私说明见 [PRIVACY.md](./PRIVACY.md)。
 
+## 界面预览
+
+![Demo 1](./demoshow/1.png)
+![Demo 2](./demoshow/2.png)
+![Demo 3](./demoshow/3.png)
+![Demo 4](./demoshow/4.png)
+
 ## 功能概览
 
 - 支持两个 AI Provider
@@ -16,8 +23,8 @@
   - 页面为 `http/https` 且已完成加载
 - 分类优先级固定为
   - `页面标题 > 域名 > 页面正文`
+- 支持在设置页中切换 `简体中文 / English / 跟随浏览器`
 - 支持中文配置页、弹窗摘要、手动扫描、Provider 测试
-- 支持中文 / English 设置页与弹窗界面
 - 支持分类结果历史面板，可回看最近自动打标记录
 - 支持按分类配置分组颜色和默认折叠策略
 - 使用真实 API / 真实浏览器能力，不包含模拟数据

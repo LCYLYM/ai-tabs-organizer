@@ -4,7 +4,33 @@ import type {
   ClassificationRequestPayload,
   OpenAiCompatibleConfig
 } from '../shared/types.js';
-import { assertValidDecision, buildChatCompletionsEndpoint, serializeError } from '../shared/utils.js';
+import {
+  assertValidDecision,
+  buildChatCompletionsEndpoint,
+  normalizeBaseUrl,
+  serializeError
+} from '../shared/utils.js';
+
+function describeOpenAiCompatibleError(
+  error: unknown,
+  endpoint: string,
+  baseUrl: string
+): string {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return `OpenAI 兼容请求超时（45 秒）。endpoint=${endpoint}。请检查模型响应速度、网络稳定性，或降低页面正文采样长度后重试。`;
+  }
+
+  if (error instanceof TypeError && /Failed to fetch/i.test(error.message)) {
+    return [
+      'OpenAI 兼容请求未成功发出。',
+      `baseUrl=${baseUrl}`,
+      `endpoint=${endpoint}`,
+      '请检查 Base URL 是否可直连、路径是否正确、证书是否有效，或目标服务是否允许浏览器扩展直接访问。'
+    ].join(' ');
+  }
+
+  return serializeError(error);
+}
 
 function extractResponseText(data: Record<string, unknown>): string {
   const choices = Array.isArray(data.choices) ? data.choices : [];
@@ -48,11 +74,13 @@ export async function classifyWithOpenAiCompatible(
     throw new Error('请先填写 OpenAI 兼容接口的模型名称。');
   }
 
+  const normalizedBaseUrl = normalizeBaseUrl(config.baseUrl);
+  const endpoint = buildChatCompletionsEndpoint(config.baseUrl);
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), 45_000);
 
   try {
-    const response = await fetch(buildChatCompletionsEndpoint(config.baseUrl), {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
@@ -95,7 +123,9 @@ export async function classifyWithOpenAiCompatible(
     const decision = JSON.parse(extractResponseText(responseJson)) as ClassificationDecision;
     return assertValidDecision(decision, payload.categories);
   } catch (error) {
-    throw new Error(`OpenAI 兼容分类失败：${serializeError(error)}`);
+    throw new Error(
+      `OpenAI 兼容分类失败：${describeOpenAiCompatibleError(error, endpoint, normalizedBaseUrl)}`
+    );
   } finally {
     clearTimeout(timeout);
   }
