@@ -504,9 +504,12 @@ async function rebuildCurrentWindow(): Promise<ScanSummary> {
     .map((tab) => tab.id);
 
   if (groupedTabIds.length > 0) {
-    await chrome.tabs.ungroup(
-      groupedTabIds.length === 1 ? groupedTabIds[0] : (groupedTabIds as [number, ...number[]])
-    );
+    const singleGroupedTabId = groupedTabIds[0];
+    if (groupedTabIds.length === 1 && singleGroupedTabId !== undefined) {
+      await chrome.tabs.ungroup(singleGroupedTabId);
+    } else {
+      await chrome.tabs.ungroup(groupedTabIds as [number, ...number[]]);
+    }
   }
 
   await appendActivityLog('info', '已触发当前窗口重建分组', {
@@ -535,9 +538,12 @@ async function clearAllGroupingAndRecords(): Promise<{
 
   if (groupedTabs.length > 0) {
     const groupedTabIds = groupedTabs.map((tab) => tab.id);
-    await chrome.tabs.ungroup(
-      groupedTabIds.length === 1 ? groupedTabIds[0] : (groupedTabIds as [number, ...number[]])
-    );
+    const singleGroupedTabId = groupedTabIds[0];
+    if (groupedTabIds.length === 1 && singleGroupedTabId !== undefined) {
+      await chrome.tabs.ungroup(singleGroupedTabId);
+    } else {
+      await chrome.tabs.ungroup(groupedTabIds as [number, ...number[]]);
+    }
   }
 
   await clearClassificationCache();
