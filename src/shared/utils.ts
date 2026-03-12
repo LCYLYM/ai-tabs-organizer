@@ -240,24 +240,28 @@ export function assertValidDecision(
     'insufficient'
   ]);
 
-  const shouldTag = Boolean(decision.shouldTag);
   const category =
     typeof decision.category === 'string' && categories.includes(decision.category)
       ? decision.category
       : null;
+  const shouldTag =
+    typeof decision.shouldTag === 'boolean' ? decision.shouldTag : Boolean(category);
   const dominantSignal =
     typeof decision.dominantSignal === 'string' && allowedSignals.has(decision.dominantSignal)
       ? decision.dominantSignal
       : 'insufficient';
+  const reason =
+    typeof decision.reason === 'string' && decision.reason.trim()
+      ? decision.reason.trim()
+      : category
+        ? '模型返回了分类结果，但未提供完整理由。'
+        : '模型未提供理由。';
 
   return {
     shouldTag: shouldTag && Boolean(category),
     category: shouldTag ? category : null,
     confidence: parseConfidence(decision.confidence),
-    reason:
-      typeof decision.reason === 'string' && decision.reason.trim()
-        ? decision.reason.trim()
-        : '模型未提供理由。',
+    reason,
     dominantSignal,
     evidence: Array.isArray(decision.evidence)
       ? decision.evidence

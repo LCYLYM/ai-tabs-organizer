@@ -572,10 +572,11 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === 'local' && changes[STORAGE_KEYS.settings]) {
+  const settingsChange = changes[STORAGE_KEYS.settings];
+  if (areaName === 'local' && settingsChange) {
     void syncAlarmWithSettings();
-    const oldSettings = changes[STORAGE_KEYS.settings].oldValue as AppSettings | undefined;
-    const newSettings = changes[STORAGE_KEYS.settings].newValue as AppSettings | undefined;
+    const oldSettings = settingsChange.oldValue as AppSettings | undefined;
+    const newSettings = settingsChange.newValue as AppSettings | undefined;
     if (!oldSettings?.enabled && newSettings?.enabled) {
       void kickoffAutoScan();
     }
