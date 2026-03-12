@@ -42,6 +42,12 @@ interface ProcessTabResult {
   detail?: string;
 }
 
+interface CollectedPageSignalsResult {
+  pageSignals: PageSignals;
+  accessMode: 'full' | 'limited';
+  detail?: string;
+}
+
 async function bootstrap(): Promise<void> {
   await ensureTrustedStorageAccess();
   await syncAlarmWithSettings();
@@ -83,9 +89,10 @@ async function isTabEligible(tab: chrome.tabs.Tab, settings: AppSettings): Promi
 async function isTabEligibleForReason(
   tab: chrome.tabs.Tab,
   settings: AppSettings,
-  requireUnfocused: boolean
+  requireUnfocused: boolean,
+  requireAutoEnabled = true
 ): Promise<boolean> {
-  if (!settings.enabled || settings.categories.length === 0) {
+  if ((requireAutoEnabled && !settings.enabled) || settings.categories.length === 0) {
     return false;
   }
   if (!tab.id || tab.windowId === undefined || !isClassifiableUrl(tab.url)) {
@@ -223,95 +230,117 @@ async function getOrCreateCategoryGroup(
   return groupId;
 }
 
-async function collectPageSignals(tab: chrome.tabs.Tab, settings: AppSettings): Promise<PageSignals> {
+async function collectPageSignals(
+  tab: chrome.tabs.Tab,
+  settings: AppSettings
+): Promise<CollectedPageSignalsResult> {
   if (!tab.id || !tab.url) {
     throw new Error('标签页缺少可用的 id 或 url。');
   }
 
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: (contentLimit: number) => {
-      const normalize = (value: string | null | undefined): string =>
-        (value ?? '').replace(/\s+/g, ' ').trim();
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (contentLimit: number) => {
+        const normalize = (value: string | null | undefined): string =>
+          (value ?? '').replace(/\s+/g, ' ').trim();
 
-      const limitText = (value: string, limit: number): string =>
-        value.length <= limit ? value : value.slice(0, limit);
+        const limitText = (value: string, limit: number): string =>
+          value.length <= limit ? value : value.slice(0, limit);
 
-      const readMeta = (selector: string): string => {
-        const element = document.querySelector<HTMLMetaElement>(selector);
-        return normalize(element?.content);
-      };
+        const readMeta = (selector: string): string => {
+          const element = document.querySelector<HTMLMetaElement>(selector);
+          return normalize(element?.content);
+        };
 
-      const collectText = (root: ParentNode, limit: number): string => {
-        const textParts: string[] = [];
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-          acceptNode(node) {
-            const parentElement = node.parentElement;
-            if (!parentElement) {
-              return NodeFilter.FILTER_REJECT;
+        const collectText = (root: ParentNode, limit: number): string => {
+          const textParts: string[] = [];
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+              const parentElement = node.parentElement;
+              if (!parentElement) {
+                return NodeFilter.FILTER_REJECT;
+              }
+              const tagName = parentElement.tagName;
+              if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG'].includes(tagName)) {
+                return NodeFilter.FILTER_REJECT;
+              }
+              return normalize(node.textContent).length > 0
+                ? NodeFilter.FILTER_ACCEPT
+                : NodeFilter.FILTER_REJECT;
             }
-            const tagName = parentElement.tagName;
-            if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG'].includes(tagName)) {
-              return NodeFilter.FILTER_REJECT;
-            }
-            return normalize(node.textContent).length > 0
-              ? NodeFilter.FILTER_ACCEPT
-              : NodeFilter.FILTER_REJECT;
-          }
-        });
+          });
 
-        while (walker.nextNode()) {
-          const currentText = normalize(walker.currentNode.textContent);
-          if (!currentText) {
-            continue;
+          while (walker.nextNode()) {
+            const currentText = normalize(walker.currentNode.textContent);
+            if (!currentText) {
+              continue;
+            }
+            textParts.push(currentText);
+            if (textParts.join(' ').length >= limit) {
+              break;
+            }
           }
-          textParts.push(currentText);
-          if (textParts.join(' ').length >= limit) {
-            break;
-          }
+
+          return limitText(textParts.join(' '), limit);
+        };
+
+        const mainRoot =
+          document.querySelector('main, article, [role="main"], [data-testid="article"]') ??
+          document.body;
+
+        return {
+          title: normalize(document.title),
+          description:
+            readMeta('meta[name="description"]') || readMeta('meta[property="og:description"]'),
+          headings: Array.from(document.querySelectorAll('h1, h2, h3'))
+            .map((heading) => normalize(heading.textContent))
+            .filter(Boolean)
+            .slice(0, 12),
+          contentExcerpt: collectText(mainRoot, contentLimit),
+          language: normalize(document.documentElement.lang) || null
+        };
+      },
+      args: [settings.contentCharacterLimit]
+    });
+
+    const extracted = results[0]?.result as
+      | {
+          title?: string;
+          description?: string;
+          headings?: string[];
+          contentExcerpt?: string;
+          language?: string | null;
         }
+      | undefined;
 
-        return limitText(textParts.join(' '), limit);
-      };
-
-      const mainRoot =
-        document.querySelector('main, article, [role="main"], [data-testid="article"]') ??
-        document.body;
-
-      return {
-        title: normalize(document.title),
-        description:
-          readMeta('meta[name="description"]') || readMeta('meta[property="og:description"]'),
-        headings: Array.from(document.querySelectorAll('h1, h2, h3'))
-          .map((heading) => normalize(heading.textContent))
-          .filter(Boolean)
-          .slice(0, 12),
-        contentExcerpt: collectText(mainRoot, contentLimit),
-        language: normalize(document.documentElement.lang) || null
-      };
-    },
-    args: [settings.contentCharacterLimit]
-  });
-
-  const extracted = results[0]?.result as
-    | {
-        title?: string;
-        description?: string;
-        headings?: string[];
-        contentExcerpt?: string;
-        language?: string | null;
+    return {
+      accessMode: 'full',
+      pageSignals: {
+        url: tab.url,
+        domain: extractDomain(tab.url),
+        title: extracted?.title?.trim() || tab.title || '',
+        description: extracted?.description?.trim() || '',
+        headings: Array.isArray(extracted?.headings) ? extracted.headings : [],
+        contentExcerpt: extracted?.contentExcerpt?.trim() || '',
+        language: extracted?.language ?? null
       }
-    | undefined;
-
-  return {
-    url: tab.url,
-    domain: extractDomain(tab.url),
-    title: extracted?.title?.trim() || tab.title || '',
-    description: extracted?.description?.trim() || '',
-    headings: Array.isArray(extracted?.headings) ? extracted.headings : [],
-    contentExcerpt: extracted?.contentExcerpt?.trim() || '',
-    language: extracted?.language ?? null
-  };
+    };
+  } catch (error) {
+    return {
+      accessMode: 'limited',
+      detail: `正文读取失败，已退回标题和域名：${serializeError(error)}`,
+      pageSignals: {
+        url: tab.url,
+        domain: extractDomain(tab.url),
+        title: (tab.title ?? '').trim(),
+        description: '',
+        headings: [],
+        contentExcerpt: '',
+        language: null
+      }
+    };
+  }
 }
 
 async function processTabForClassification(
@@ -320,6 +349,7 @@ async function processTabForClassification(
   reason: string,
   options?: {
     requireUnfocused?: boolean;
+    requireAutoEnabled?: boolean;
   }
 ): Promise<ProcessTabResult> {
   if (!tab.id || tab.windowId === undefined || !tab.url) {
@@ -331,7 +361,8 @@ async function processTabForClassification(
   }
 
   const requireUnfocused = options?.requireUnfocused ?? true;
-  if (!(await isTabEligibleForReason(tab, settings, requireUnfocused))) {
+  const requireAutoEnabled = options?.requireAutoEnabled ?? true;
+  if (!(await isTabEligibleForReason(tab, settings, requireUnfocused, requireAutoEnabled))) {
     return { status: 'skipped', detail: '不满足当前扫描条件。' };
   }
 
@@ -341,22 +372,20 @@ async function processTabForClassification(
     return { status: 'skipped', detail: '该页面已经打过标，已跳过。' };
   }
 
-  const accessProbe = await probeTabAccess(tab);
-  if (!accessProbe.ok) {
-    await appendActivityLog('info', '跳过不可注入页面', {
-      tabId: tab.id,
-      reason,
-      url: tab.url,
-      detail: accessProbe.detail
-    });
-    return { status: 'skipped', detail: accessProbe.detail };
-  }
-
   processingTabs.add(tab.id);
 
   try {
-    const pageSignals = await collectPageSignals(tab, settings);
-    const payload = buildClassificationPayload(settings, pageSignals);
+    const collectedSignals = await collectPageSignals(tab, settings);
+    if (collectedSignals.accessMode === 'limited') {
+      await appendActivityLog('info', '页面正文不可读取，退回标题和域名分类', {
+        tabId: tab.id,
+        reason,
+        url: tab.url,
+        detail: collectedSignals.detail
+      });
+    }
+
+    const payload = buildClassificationPayload(settings, collectedSignals.pageSignals);
     const decision = await classifyPage(payload, settings);
 
     if (!decision.shouldTag || !decision.category) {
@@ -376,8 +405,8 @@ async function processTabForClassification(
       taggedAt: new Date().toISOString(),
       providerType: settings.providerType,
       confidence: decision.confidence,
-      title: pageSignals.title,
-      url: pageSignals.url,
+      title: collectedSignals.pageSignals.title,
+      url: collectedSignals.pageSignals.url,
       groupId
     });
 
@@ -401,6 +430,7 @@ async function scanTabs(
   reason: string,
   options?: {
     requireUnfocused?: boolean;
+    requireAutoEnabled?: boolean;
   }
 ): Promise<ScanSummary> {
   const settings = await loadSettings();
@@ -447,7 +477,7 @@ async function scanTabs(
 
 async function scanCurrentWindow(reason: string): Promise<ScanSummary> {
   const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
-  return scanTabs(tabs, reason, { requireUnfocused: false });
+  return scanTabs(tabs, reason, { requireUnfocused: false, requireAutoEnabled: false });
 }
 
 async function testOpenAiProvider(): Promise<string> {
@@ -457,49 +487,26 @@ async function testOpenAiProvider(): Promise<string> {
   }
 
   const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
-  const orderedTabs = [
-    ...tabs.filter((tab) => tab.active),
-    ...tabs.filter((tab) => !tab.active)
-  ].filter((tab, index, list) => list.findIndex((candidate) => candidate.id === tab.id) === index);
-  const skippedReasons: string[] = [];
-  let targetTab: chrome.tabs.Tab | undefined;
-
-  for (const tab of orderedTabs) {
-    if (!isClassifiableUrl(tab.url)) {
-      skippedReasons.push(`tab ${tab.id ?? 'unknown'}: 非 http/https 页面 ${tab.url ?? '(无 URL)'}`);
-      continue;
-    }
-
-    const probe = await probeTabAccess(tab);
-    if (probe.ok) {
-      targetTab = tab;
-      break;
-    }
-
-    skippedReasons.push(`tab ${tab.id ?? 'unknown'}: ${probe.detail ?? '不可注入页面'}`);
-  }
+  const targetTab = [...tabs]
+    .filter((tab) => isClassifiableUrl(tab.url))
+    .sort((left, right) => (right.lastAccessed ?? 0) - (left.lastAccessed ?? 0))[0];
 
   if (!targetTab || !targetTab.id || !targetTab.url) {
-    throw new Error(
-      [
-        '当前窗口没有可测试的网页标签页。请切到一个普通 http/https 页面后再测试。',
-        skippedReasons.length > 0 ? `候选页面跳过原因：${skippedReasons.join(' | ')}` : null
-      ]
-        .filter(Boolean)
-        .join('\n')
-    );
+    throw new Error('当前窗口没有可测试的 http/https 网页标签页。');
   }
 
-  const pageSignals = await collectPageSignals(targetTab, settings);
+  const collectedSignals = await collectPageSignals(targetTab, settings);
   const decision = await classifyWithOpenAiCompatible(
-    buildClassificationPayload(settings, pageSignals),
+    buildClassificationPayload(settings, collectedSignals.pageSignals),
     settings.openAiCompatible
   );
 
   const message = `测试成功：${decision.shouldTag ? `建议分类为 ${decision.category}` : '当前页面不建议打标'}。`;
   await appendActivityLog('info', 'Provider 测试成功', {
     providerType: 'openai-compatible',
-    url: pageSignals.url,
+    url: collectedSignals.pageSignals.url,
+    accessMode: collectedSignals.accessMode,
+    accessDetail: collectedSignals.detail,
     category: decision.category,
     dominantSignal: decision.dominantSignal,
     confidence: decision.confidence,
