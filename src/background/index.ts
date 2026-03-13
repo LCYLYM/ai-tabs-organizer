@@ -59,11 +59,20 @@ interface CollectedPageSignalsResult {
 interface UrlChangeReclassificationState {
   shouldReclassify: boolean;
   previousState?: TabClassificationStateRecord;
+  reason:
+    | 'disabled'
+    | 'no-tab-id'
+    | 'not-grouped'
+    | 'no-state'
+    | 'group-changed'
+    | 'url-unchanged'
+    | 'url-changed';
 }
 
 async function bootstrap(): Promise<void> {
   await ensureTrustedStorageAccess();
   await syncAlarmWithSettings();
+  await hydrateUrlChangeReclassificationState(await loadSettings());
   const activeTabs = await chrome.tabs.query({ active: true });
   for (const tab of activeTabs) {
     if (tab.id && tab.windowId !== undefined) {
@@ -136,29 +145,33 @@ async function resolveUrlChangeReclassificationState(
   tab: chrome.tabs.Tab,
   settings: AppSettings
 ): Promise<UrlChangeReclassificationState> {
-  if (
-    !settings.reclassifyOnUrlChange ||
-    !tab.id ||
-    !tab.url ||
-    tab.groupId === undefined ||
-    tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE
-  ) {
-    return { shouldReclassify: false };
+  if (!settings.reclassifyOnUrlChange) {
+    return { shouldReclassify: false, reason: 'disabled' };
+  }
+
+  if (!tab.id || !tab.url) {
+    return { shouldReclassify: false, reason: 'no-tab-id' };
+  }
+
+  if (tab.groupId === undefined || tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) {
+    return { shouldReclassify: false, reason: 'not-grouped' };
   }
 
   const state = await loadTabClassificationState();
   const previousState = state[String(tab.id)];
   if (!previousState) {
-    return { shouldReclassify: false };
+    return { shouldReclassify: false, reason: 'no-state' };
   }
 
   if (previousState.groupId !== tab.groupId) {
-    return { shouldReclassify: false, previousState };
+    return { shouldReclassify: false, previousState, reason: 'group-changed' };
   }
 
+  const urlChanged = previousState.lastClassifiedUrl.trim() !== tab.url.trim();
   return {
-    shouldReclassify: previousState.lastClassifiedUrl.trim() !== tab.url.trim(),
-    previousState
+    shouldReclassify: urlChanged,
+    previousState,
+    reason: urlChanged ? 'url-changed' : 'url-unchanged'
   };
 }
 
@@ -168,6 +181,65 @@ async function ungroupTabIfNeeded(tabId: number, groupId: number | undefined): P
   }
 
   await chrome.tabs.ungroup(tabId);
+}
+
+async function hydrateUrlChangeReclassificationState(settings: AppSettings): Promise<void> {
+  if (!settings.reclassifyOnUrlChange) {
+    return;
+  }
+
+  const [tabs, groups, cache, existingState] = await Promise.all([
+    chrome.tabs.query({}),
+    chrome.tabGroups.query({}),
+    loadClassificationCache(),
+    loadTabClassificationState()
+  ]);
+
+  const groupTitleById = new Map<number, string>();
+  for (const group of groups) {
+    groupTitleById.set(group.id, group.title ?? '');
+  }
+
+  let hydratedCount = 0;
+  for (const tab of tabs) {
+    if (
+      !tab.id ||
+      !tab.url ||
+      tab.groupId === undefined ||
+      tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE ||
+      existingState[String(tab.id)]
+    ) {
+      continue;
+    }
+
+    const cached = cache[buildPageSignature(tab.url)];
+    const groupTitle = groupTitleById.get(tab.groupId) ?? '';
+    if (!cached || !cached.category || cached.category !== groupTitle) {
+      continue;
+    }
+
+    await upsertTabClassificationState({
+      tabId: tab.id,
+      lastClassifiedUrl: tab.url,
+      groupId: tab.groupId,
+      category: cached.category,
+      taggedAt: cached.taggedAt
+    });
+    existingState[String(tab.id)] = {
+      tabId: tab.id,
+      lastClassifiedUrl: tab.url,
+      groupId: tab.groupId,
+      category: cached.category,
+      taggedAt: cached.taggedAt
+    };
+    hydratedCount += 1;
+  }
+
+  if (hydratedCount > 0) {
+    await appendActivityLog('info', '已为现有已分组标签页建立 URL 变化重分类状态', {
+      hydratedCount
+    });
+  }
 }
 
 function buildClassificationPayload(
@@ -441,6 +513,23 @@ async function processTabForClassification(
   const requireUnfocused = options?.requireUnfocused ?? true;
   const requireAutoEnabled = options?.requireAutoEnabled ?? true;
   const urlChangeReclassification = await resolveUrlChangeReclassificationState(tab, settings);
+  if (
+    settings.reclassifyOnUrlChange &&
+    tab.groupId !== undefined &&
+    tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE &&
+    urlChangeReclassification.reason !== 'url-changed'
+  ) {
+    await appendActivityLog('info', '已分组标签页未触发 URL 变化重分类', {
+      tabId: tab.id,
+      reason,
+      url: tab.url,
+      reclassifyReason: urlChangeReclassification.reason,
+      previousUrl: urlChangeReclassification.previousState?.lastClassifiedUrl,
+      previousCategory: urlChangeReclassification.previousState?.category,
+      groupId: tab.groupId
+    });
+  }
+
   if (
     !(await isTabEligibleForReason(
       tab,
@@ -846,6 +935,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     const newSettings = settingsChange.newValue as AppSettings | undefined;
     if (!oldSettings?.enabled && newSettings?.enabled) {
       void kickoffAutoScan();
+    }
+    if (!oldSettings?.reclassifyOnUrlChange && newSettings?.reclassifyOnUrlChange && newSettings) {
+      void hydrateUrlChangeReclassificationState(newSettings);
     }
   }
 });
