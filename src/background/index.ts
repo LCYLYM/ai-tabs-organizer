@@ -398,10 +398,74 @@ async function collectPageSignals(
         const limitText = (value: string, limit: number): string =>
           value.length <= limit ? value : value.slice(0, limit);
 
+        const excludedSelector =
+          'script, style, noscript, svg, canvas, nav, header, footer, aside, form, dialog, template, [hidden], [aria-hidden="true"]';
+
         const readMeta = (selector: string): string => {
           const element = document.querySelector<HTMLMetaElement>(selector);
           return normalize(element?.content);
         };
+
+        const isVisibleElement = (element: Element | null): element is HTMLElement => {
+          if (!(element instanceof HTMLElement)) {
+            return false;
+          }
+
+          if (element.matches(excludedSelector) || element.closest(excludedSelector)) {
+            return false;
+          }
+
+          const style = window.getComputedStyle(element);
+          if (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            style.visibility === 'collapse' ||
+            style.opacity === '0'
+          ) {
+            return false;
+          }
+
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+
+        const isInViewport = (element: HTMLElement): boolean => {
+          const rect = element.getBoundingClientRect();
+          return rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
+        };
+
+        const appendText = (
+          rawValue: string,
+          parts: string[],
+          seen: Set<string>,
+          limit: number
+        ): boolean => {
+          const normalized = normalize(rawValue);
+          if (!normalized || seen.has(normalized)) {
+            return false;
+          }
+
+          seen.add(normalized);
+          parts.push(normalized);
+          return parts.join(' ').length >= limit;
+        };
+
+        const sortByPriority = <T extends HTMLElement>(elements: T[]): T[] =>
+          [...elements].sort((left, right) => {
+            const leftInViewport = isInViewport(left) ? 0 : 1;
+            const rightInViewport = isInViewport(right) ? 0 : 1;
+            if (leftInViewport !== rightInViewport) {
+              return leftInViewport - rightInViewport;
+            }
+
+            const leftRect = left.getBoundingClientRect();
+            const rightRect = right.getBoundingClientRect();
+            if (leftRect.top !== rightRect.top) {
+              return leftRect.top - rightRect.top;
+            }
+
+            return leftRect.left - rightRect.left;
+          });
 
         const collectText = (root: ParentNode, limit: number): string => {
           const textParts: string[] = [];
@@ -435,19 +499,64 @@ async function collectPageSignals(
           return limitText(textParts.join(' '), limit);
         };
 
+        const collectVisibleText = (root: ParentNode, limit: number, headings: string[]): string => {
+          const parts: string[] = [];
+          const seen = new Set<string>();
+
+          for (const heading of headings) {
+            if (appendText(heading, parts, seen, limit)) {
+              return limitText(parts.join(' '), limit);
+            }
+          }
+
+          const blockSelectors = 'h1, h2, h3, p, li, blockquote, summary, figcaption, [role="heading"]';
+          const visibleBlocks = root instanceof Element
+            ? sortByPriority(
+                Array.from(root.querySelectorAll(blockSelectors)).filter(isVisibleElement)
+              )
+            : [];
+
+          for (const element of visibleBlocks) {
+            const text = normalize(element.innerText || element.textContent);
+            if (appendText(text, parts, seen, limit)) {
+              return limitText(parts.join(' '), limit);
+            }
+          }
+
+          if (root instanceof HTMLElement) {
+            const visibleLines = (root.innerText || root.textContent || '')
+              .split('\n')
+              .map((line) => normalize(line))
+              .filter(Boolean);
+
+            for (const line of visibleLines) {
+              if (appendText(line, parts, seen, limit)) {
+                return limitText(parts.join(' '), limit);
+              }
+            }
+          }
+
+          const fallbackText = collectText(root, limit);
+          appendText(fallbackText, parts, seen, limit);
+          return limitText(parts.join(' '), limit);
+        };
+
         const mainRoot =
           document.querySelector('main, article, [role="main"], [data-testid="article"]') ??
           document.body;
+
+        const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
+          .filter(isVisibleElement)
+          .map((heading) => normalize(heading.innerText || heading.textContent))
+          .filter(Boolean)
+          .slice(0, 12);
 
         return {
           title: normalize(document.title),
           description:
             readMeta('meta[name="description"]') || readMeta('meta[property="og:description"]'),
-          headings: Array.from(document.querySelectorAll('h1, h2, h3'))
-            .map((heading) => normalize(heading.textContent))
-            .filter(Boolean)
-            .slice(0, 12),
-          contentExcerpt: collectText(mainRoot, contentLimit),
+          headings,
+          contentExcerpt: collectVisibleText(mainRoot, contentLimit, headings),
           language: normalize(document.documentElement.lang) || null
         };
       },
