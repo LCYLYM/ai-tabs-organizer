@@ -19,6 +19,7 @@ export interface AppSettings {
   categories: string[];
   categoryRules: Record<string, CategoryRule>;
   promptSupplement: string;
+  reclassifyOnUrlChange: boolean;
   providerType: ProviderType;
   openAiCompatible: OpenAiCompatibleConfig;
   chromeBuiltIn: ChromeBuiltInConfig;
@@ -70,6 +71,14 @@ export interface ClassificationCacheRecord {
   evidence: string[];
   accessMode: 'full' | 'limited';
   accessDetail?: string;
+}
+
+export interface TabClassificationStateRecord {
+  tabId: number;
+  lastClassifiedUrl: string;
+  groupId: number | null;
+  category: string;
+  taggedAt: string;
 }
 
 export interface ActivityLogEntry {

@@ -68,6 +68,8 @@ type TranslationKey =
   | 'options.chromeHint'
   | 'options.strategy'
   | 'options.enableAuto'
+  | 'options.reclassifyOnUrlChange'
+  | 'options.reclassifyOnUrlChangeHint'
   | 'options.contentLimit'
   | 'options.alarmMinutes'
   | 'options.language'
@@ -189,6 +191,8 @@ const zhCN: TranslationMap = {
   'options.chromeHint': '需要 Chrome 138+ 且本机满足 Gemini Nano 内置模型要求。首次使用可能会下载模型。',
   'options.strategy': '自动策略',
   'options.enableAuto': '启用自动打标',
+  'options.reclassifyOnUrlChange': '已分组标签页 URL 变化后自动重新分类',
+  'options.reclassifyOnUrlChangeHint': '仅对之前由扩展分过组、且当前 URL 与上次分类时不同的标签页生效。',
   'options.contentLimit': '正文采样字符数上限',
   'options.alarmMinutes': '后台扫描周期（分钟）',
   'options.language': '界面语言',
@@ -309,6 +313,8 @@ const en: TranslationMap = {
   'options.chromeHint': 'Requires Chrome 138+ and a device that supports Gemini Nano. The model may be downloaded on first use.',
   'options.strategy': 'Automation',
   'options.enableAuto': 'Enable auto tagging',
+  'options.reclassifyOnUrlChange': 'Reclassify grouped tabs after URL changes',
+  'options.reclassifyOnUrlChangeHint': 'Only applies to tabs previously grouped by the extension when the current URL differs from the last classified URL.',
   'options.contentLimit': 'Content sampling character limit',
   'options.alarmMinutes': 'Background scan interval (minutes)',
   'options.language': 'Interface language',

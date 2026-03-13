@@ -114,6 +114,13 @@
             <input id="enabled-input" type="checkbox" />
             <span data-i18n="options.enableAuto">启用自动打标</span>
           </label>
+          <label class="checkbox">
+            <input id="reclassify-url-change-input" type="checkbox" />
+            <span data-i18n="options.reclassifyOnUrlChange">已分组标签页 URL 变化后自动重新分类</span>
+          </label>
+          <p class="hint" data-i18n="options.reclassifyOnUrlChangeHint">
+            仅对之前由扩展分过组、且当前 URL 与上次分类时不同的标签页生效。
+          </p>
           <label class="field">
             <span data-i18n="options.contentLimit">正文采样字符数上限</span>
             <input id="content-limit-input" type="number" min="500" max="12000" step="100" />

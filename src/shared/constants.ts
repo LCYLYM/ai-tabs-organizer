@@ -3,6 +3,7 @@ import type { AppSettings } from './types.js';
 export const STORAGE_KEYS = {
   settings: 'appSettings',
   cache: 'classificationCache',
+  tabState: 'tabClassificationState',
   activityLogs: 'activityLogs',
   providerHealth: 'providerHealth'
 } as const;
@@ -13,6 +14,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   categories: [],
   categoryRules: {},
   promptSupplement: '',
+  reclassifyOnUrlChange: false,
   providerType: 'openai-compatible',
   openAiCompatible: {
     baseUrl: 'https://api.openai.com/v1',

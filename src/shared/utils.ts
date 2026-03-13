@@ -38,6 +38,7 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     categories,
     categoryRules: sanitizeCategoryRules(raw.categoryRules ?? {}, categories),
     promptSupplement: (raw.promptSupplement ?? '').trim(),
+    reclassifyOnUrlChange: Boolean(raw.reclassifyOnUrlChange),
     providerType: raw.providerType === 'chrome-built-in' ? 'chrome-built-in' : 'openai-compatible',
     openAiCompatible: {
       baseUrl: normalizeBaseUrl(raw.openAiCompatible?.baseUrl ?? 'https://api.openai.com/v1'),

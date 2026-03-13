@@ -3,14 +3,18 @@ import { AUTOMATION_ALARM_NAME, STORAGE_KEYS } from '../shared/constants.js';
 import { resolveUiLanguage, t } from '../shared/i18n.js';
 import {
   appendActivityLog,
+  clearTabClassificationState,
   clearClassificationCache,
-  removeClassificationRecordsByUrls,
   ensureTrustedStorageAccess,
   loadActivityLogs,
   loadClassificationCache,
   loadProviderHealth,
   loadSettings,
+  loadTabClassificationState,
+  removeClassificationRecordsByUrls,
+  removeTabClassificationStates,
   saveProviderHealth,
+  upsertTabClassificationState,
   upsertClassificationRecord
 } from '../shared/storage.js';
 import type {
@@ -22,7 +26,8 @@ import type {
   PopupSummary,
   ProviderType,
   RuntimeRequest,
-  ScanSummary
+  ScanSummary,
+  TabClassificationStateRecord
 } from '../shared/types.js';
 import {
   buildPageSignature,
@@ -49,6 +54,11 @@ interface CollectedPageSignalsResult {
   pageSignals: PageSignals;
   accessMode: 'full' | 'limited';
   detail?: string;
+}
+
+interface UrlChangeReclassificationState {
+  shouldReclassify: boolean;
+  previousState?: TabClassificationStateRecord;
 }
 
 async function bootstrap(): Promise<void> {
@@ -93,7 +103,8 @@ async function isTabEligibleForReason(
   tab: chrome.tabs.Tab,
   settings: AppSettings,
   requireUnfocused: boolean,
-  requireAutoEnabled = true
+  requireAutoEnabled = true,
+  allowGrouped = false
 ): Promise<boolean> {
   if ((requireAutoEnabled && !settings.enabled) || settings.categories.length === 0) {
     return false;
@@ -104,7 +115,11 @@ async function isTabEligibleForReason(
   if (tab.status !== 'complete') {
     return false;
   }
-  if (tab.groupId !== undefined && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+  if (
+    !allowGrouped &&
+    tab.groupId !== undefined &&
+    tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE
+  ) {
     return false;
   }
 
@@ -115,6 +130,44 @@ async function isTabEligibleForReason(
   const focusedWindowId = await getFocusedWindowId();
   const isFocusedTab = focusedWindowId != null && tab.windowId === focusedWindowId && Boolean(tab.active);
   return !isFocusedTab;
+}
+
+async function resolveUrlChangeReclassificationState(
+  tab: chrome.tabs.Tab,
+  settings: AppSettings
+): Promise<UrlChangeReclassificationState> {
+  if (
+    !settings.reclassifyOnUrlChange ||
+    !tab.id ||
+    !tab.url ||
+    tab.groupId === undefined ||
+    tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE
+  ) {
+    return { shouldReclassify: false };
+  }
+
+  const state = await loadTabClassificationState();
+  const previousState = state[String(tab.id)];
+  if (!previousState) {
+    return { shouldReclassify: false };
+  }
+
+  if (previousState.groupId !== tab.groupId) {
+    return { shouldReclassify: false, previousState };
+  }
+
+  return {
+    shouldReclassify: previousState.lastClassifiedUrl.trim() !== tab.url.trim(),
+    previousState
+  };
+}
+
+async function ungroupTabIfNeeded(tabId: number, groupId: number | undefined): Promise<void> {
+  if (groupId === undefined || groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) {
+    return;
+  }
+
+  await chrome.tabs.ungroup(tabId);
 }
 
 function buildClassificationPayload(
@@ -387,12 +440,26 @@ async function processTabForClassification(
 
   const requireUnfocused = options?.requireUnfocused ?? true;
   const requireAutoEnabled = options?.requireAutoEnabled ?? true;
-  if (!(await isTabEligibleForReason(tab, settings, requireUnfocused, requireAutoEnabled))) {
+  const urlChangeReclassification = await resolveUrlChangeReclassificationState(tab, settings);
+  if (
+    !(await isTabEligibleForReason(
+      tab,
+      settings,
+      requireUnfocused,
+      requireAutoEnabled,
+      urlChangeReclassification.shouldReclassify
+    ))
+  ) {
     const alreadyGrouped =
       tab.groupId !== undefined && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE;
     return {
       status: 'skipped',
-      detail: alreadyGrouped ? '该标签页当前已经在分组中，已跳过。' : '不满足当前扫描条件。'
+      detail:
+        alreadyGrouped && settings.reclassifyOnUrlChange
+          ? '该标签页当前已经在分组中，且 URL 未变化，已跳过。'
+          : alreadyGrouped
+            ? '该标签页当前已经在分组中，已跳过。'
+            : '不满足当前扫描条件。'
     };
   }
 
@@ -413,6 +480,23 @@ async function processTabForClassification(
     const decision = await classifyPage(payload, settings);
 
     if (!decision.shouldTag || !decision.category) {
+      if (urlChangeReclassification.shouldReclassify) {
+        await ungroupTabIfNeeded(tab.id, tab.groupId);
+        await removeTabClassificationStates([tab.id]);
+        await appendActivityLog('info', '标签页 URL 变化后已移除旧分组，且未重新打标', {
+          tabId: tab.id,
+          reason,
+          previousUrl: urlChangeReclassification.previousState?.lastClassifiedUrl,
+          currentUrl: tab.url,
+          previousCategory: urlChangeReclassification.previousState?.category,
+          decision
+        });
+        return {
+          status: 'skipped',
+          detail: `URL 已变化，旧分组已清除；模型判定为不应打标：${decision.reason}`
+        };
+      }
+
       await appendActivityLog('info', '分类完成但未执行打标', {
         tabId: tab.id,
         reason,
@@ -442,6 +526,13 @@ async function processTabForClassification(
       accessMode: collectedSignals.accessMode,
       accessDetail: collectedSignals.detail
     });
+    await upsertTabClassificationState({
+      tabId: tab.id,
+      lastClassifiedUrl: collectedSignals.pageSignals.url,
+      groupId,
+      category: decision.category,
+      taggedAt: new Date().toISOString()
+    });
 
     await appendActivityLog('info', '标签页已自动打标', {
       tabId: tab.id,
@@ -449,10 +540,17 @@ async function processTabForClassification(
       category: decision.category,
       confidence: decision.confidence,
       dominantSignal: decision.dominantSignal,
-      url: tab.url
+      url: tab.url,
+      reclassifiedBecauseUrlChanged: urlChangeReclassification.shouldReclassify,
+      previousUrl: urlChangeReclassification.previousState?.lastClassifiedUrl
     });
 
-    return { status: 'tagged', detail: `已归类为 ${decision.category}` };
+    return {
+      status: 'tagged',
+      detail: urlChangeReclassification.shouldReclassify
+        ? `URL 已变化，已重新归类为 ${decision.category}`
+        : `已归类为 ${decision.category}`
+    };
   } finally {
     processingTabs.delete(tab.id);
   }
@@ -547,8 +645,10 @@ async function rebuildCurrentWindow(): Promise<ScanSummary> {
 async function clearCurrentWindowGroupingAndRecords(): Promise<{
   ungroupedTabs: number;
   clearedRecords: number;
+  clearedTabStates: number;
 }> {
   const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
+  const tabIds = tabs.map((tab) => tab.id).filter((tabId): tabId is number => Boolean(tabId));
   const groupedTabIds = tabs
     .filter(
       (tab): tab is chrome.tabs.Tab & { id: number } =>
@@ -570,10 +670,12 @@ async function clearCurrentWindowGroupingAndRecords(): Promise<{
   const clearedRecords = await removeClassificationRecordsByUrls(
     tabs.map((tab) => tab.url).filter((url): url is string => Boolean(url))
   );
+  const clearedTabStates = await removeTabClassificationStates(tabIds);
 
   const result = {
     ungroupedTabs: groupedTabIds.length,
-    clearedRecords
+    clearedRecords,
+    clearedTabStates
   };
 
   await appendActivityLog('info', '已清除当前窗口标签页分组和打标记录', result);
@@ -584,8 +686,10 @@ async function clearAllGroupingAndRecords(): Promise<{
   ungroupedTabs: number;
   clearedRecords: number;
   touchedWindows: number;
+  clearedTabStates: number;
 }> {
   const [tabs, cache] = await Promise.all([chrome.tabs.query({}), loadClassificationCache()]);
+  const tabIds = tabs.map((tab) => tab.id).filter((tabId): tabId is number => Boolean(tabId));
   const groupedTabs = tabs.filter(
     (tab): tab is chrome.tabs.Tab & { id: number } =>
       Boolean(tab.id) &&
@@ -604,6 +708,7 @@ async function clearAllGroupingAndRecords(): Promise<{
   }
 
   await clearClassificationCache();
+  const clearedTabStates = await removeTabClassificationStates(tabIds);
 
   const touchedWindows = new Set(
     groupedTabs
@@ -614,7 +719,8 @@ async function clearAllGroupingAndRecords(): Promise<{
   const result = {
     ungroupedTabs: groupedTabs.length,
     clearedRecords: Object.keys(cache).length,
-    touchedWindows
+    touchedWindows,
+    clearedTabStates
   };
 
   await appendActivityLog('info', '已清除所有标签页分组和打标记录', result);
@@ -719,11 +825,17 @@ async function buildPopupSummary(): Promise<PopupSummary> {
 }
 
 chrome.runtime.onInstalled.addListener((_details) => {
-  void bootstrap();
+  void (async () => {
+    await clearTabClassificationState();
+    await bootstrap();
+  })();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void bootstrap();
+  void (async () => {
+    await clearTabClassificationState();
+    await bootstrap();
+  })();
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -790,6 +902,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       await processTabForClassification(await chrome.tabs.get(tabId), settings, 'tab-updated');
     }
   })();
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void removeTabClassificationStates([tabId]);
 });
 
 chrome.runtime.onMessage.addListener((message: RuntimeRequest, _sender, sendResponse) => {

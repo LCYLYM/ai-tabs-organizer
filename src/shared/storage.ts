@@ -3,7 +3,8 @@ import type {
   ActivityLogEntry,
   AppSettings,
   ClassificationCacheRecord,
-  ProviderHealthStatus
+  ProviderHealthStatus,
+  TabClassificationStateRecord
 } from './types.js';
 import { buildLogEntry, sanitizeSettings } from './utils.js';
 
@@ -76,6 +77,46 @@ export async function removeClassificationRecordsByUrls(urls: string[]): Promise
 
   await saveClassificationCache(cache);
   return removed;
+}
+
+export async function loadTabClassificationState(): Promise<
+  Record<string, TabClassificationStateRecord>
+> {
+  return (
+    (await getLocalValue<Record<string, TabClassificationStateRecord>>(STORAGE_KEYS.tabState)) ?? {}
+  );
+}
+
+export async function upsertTabClassificationState(
+  record: TabClassificationStateRecord
+): Promise<void> {
+  const state = await loadTabClassificationState();
+  state[String(record.tabId)] = record;
+  await setLocalValue(STORAGE_KEYS.tabState, state);
+}
+
+export async function removeTabClassificationStates(tabIds: number[]): Promise<number> {
+  const uniqueIds = [...new Set(tabIds.filter((tabId) => Number.isInteger(tabId) && tabId > 0))];
+  if (uniqueIds.length === 0) {
+    return 0;
+  }
+
+  const state = await loadTabClassificationState();
+  let removed = 0;
+  for (const tabId of uniqueIds) {
+    const key = String(tabId);
+    if (state[key]) {
+      delete state[key];
+      removed += 1;
+    }
+  }
+
+  await setLocalValue(STORAGE_KEYS.tabState, state);
+  return removed;
+}
+
+export async function clearTabClassificationState(): Promise<void> {
+  await chrome.storage.local.remove(STORAGE_KEYS.tabState);
 }
 
 export async function loadActivityLogs(): Promise<ActivityLogEntry[]> {

@@ -27,6 +27,9 @@ const modelInput = document.querySelector<HTMLInputElement>('#model-input');
 const temperatureInput = document.querySelector<HTMLInputElement>('#temperature-input');
 const topKInput = document.querySelector<HTMLInputElement>('#topk-input');
 const enabledInput = document.querySelector<HTMLInputElement>('#enabled-input');
+const reclassifyUrlChangeInput = document.querySelector<HTMLInputElement>(
+  '#reclassify-url-change-input'
+);
 const languageSelect = document.querySelector<HTMLSelectElement>('#language-select');
 const contentLimitInput = document.querySelector<HTMLInputElement>('#content-limit-input');
 const alarmMinutesInput = document.querySelector<HTMLInputElement>('#alarm-minutes-input');
@@ -60,6 +63,10 @@ const ui = {
   temperatureInput: assertElement(temperatureInput, 'temperature-input'),
   topKInput: assertElement(topKInput, 'topk-input'),
   enabledInput: assertElement(enabledInput, 'enabled-input'),
+  reclassifyUrlChangeInput: assertElement(
+    reclassifyUrlChangeInput,
+    'reclassify-url-change-input'
+  ),
   languageSelect: assertElement(languageSelect, 'language-select'),
   contentLimitInput: assertElement(contentLimitInput, 'content-limit-input'),
   alarmMinutesInput: assertElement(alarmMinutesInput, 'alarm-minutes-input'),
@@ -132,6 +139,7 @@ function readSettingsFromForm(): AppSettings {
     categories,
     categoryRules: readCategoryRulesFromForm(categories),
     promptSupplement: ui.promptInput.value.trim(),
+    reclassifyOnUrlChange: ui.reclassifyUrlChangeInput.checked,
     providerType:
       ui.providerSelect.value === 'chrome-built-in' ? 'chrome-built-in' : 'openai-compatible',
     openAiCompatible: {
@@ -161,6 +169,7 @@ function writeSettingsToForm(settings: AppSettings): void {
   ui.temperatureInput.value = String(settings.chromeBuiltIn.temperature);
   ui.topKInput.value = String(settings.chromeBuiltIn.topK);
   ui.enabledInput.checked = settings.enabled;
+  ui.reclassifyUrlChangeInput.checked = settings.reclassifyOnUrlChange;
   ui.languageSelect.value = settings.language;
   ui.contentLimitInput.value = String(settings.contentCharacterLimit);
   ui.alarmMinutesInput.value = String(settings.alarmPeriodMinutes);
